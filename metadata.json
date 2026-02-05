@@ -1,0 +1,5 @@
+{
+  "name": "Neon Snake AI",
+  "description": "A futuristic, neon-styled Snake game featuring AI-generated levels powered by Google Gemini. Challenge yourself on custom maps created from your text prompts.",
+  "requestFramePermissions": []
+}
