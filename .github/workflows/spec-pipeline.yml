@@ -1,0 +1,426 @@
+name: spec-pipeline
+
+# The headless half of the pipeline. Label an issue and the PRD arrives as a PR.
+#
+# Only stages 3-4 (PRD + validation) and stage 6 (acceptance) run unattended.
+# Planning and implementation stay manual on purpose: the plan is the human gate,
+# and an implementation job that runs without someone having read the plan is the
+# expensive failure this whole design is built to avoid.
+#
+# Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets (the Claude subscription;
+# generate it with `claude setup-token`). Not an API key.
+#
+# The issue body is written by whoever opened the issue, and under the triage
+# decision (K6) no human reads it before the model does. Everything below treats
+# it accordingly:
+#
+#   * the issue is fetched in a step with no model in it;
+#   * it is wrapped by scripts/issue_envelope.py before any model sees it;
+#   * the Claude step holds no GH_TOKEN, so text that talks a model into using
+#     `gh` has nothing to use it with;
+#   * the Claude step grants no broad `python3` or `cat`, in the flag OR in the
+#     command files -- a skill's `allowed-tools` grant applies in a -p run too,
+#     so removing it from one place alone would remove nothing;
+#   * assets/ci-deny-settings.json denies the dangerous forms by rule, which is
+#     the only one of the three mechanisms that nothing can override;
+#   * the settings files that carry those rules and the guards are checked
+#     before the model runs (scripts/settings_preflight.py), because a -p run
+#     that cannot validate one drops it silently.
+#
+# Exercised on a disposable scratch repository, never on a real project. Treat
+# the first run in your own repo as an experiment, on an issue you do not mind
+# mangling. It also needs Settings -> Actions -> General -> "Allow GitHub Actions
+# to create and approve pull requests"; without it every step works, the branch
+# is pushed, and only the PR fails to open.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number to spec"
+        required: true
+      stage:
+        description: "spec | acceptance"
+        required: true
+        default: spec
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  spec:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'spec:auto'
+    # Pinned, not `ubuntu-latest`. The `ubuntu-latest` label migrates to
+    # Ubuntu 26 on 19 October 2026, and an unattended job whose operating
+    # system changes under it with nobody watching is the kind of surprise
+    # this pipeline exists to avoid. Bump this deliberately, with a run to
+    # prove it.
+    runs-on: ubuntu-24.04
+    env:
+      ISSUE: ${{ github.event.issue.number || inputs.issue }}
+      STAGE: ${{ inputs.stage || 'spec' }}
+      # Outside specs/, so `git add specs/` can never commit the issue text, and
+      # outside the model's write grant, so the model cannot edit what it reads.
+      ENVELOPE: .dev-flow-run/issue-${{ github.event.issue.number || inputs.issue }}.md
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # ---------------------------------------------------------------------
+      # Settings preflight. First, before the trust check and long before a
+      # model: a -p run silently ignores a settings file that fails validation,
+      # and it ignores the whole file, so one bad value anywhere in
+      # .claude/settings.json would switch off the acceptance guard, the deny
+      # rules and `autoMemoryEnabled: false` together, with no error. The same
+      # goes for the --settings file the Claude step passes. This fails the job
+      # instead: both files parse strictly, and every hook, deny rule, env value
+      # and setting dev-flow ships is present (scripts/settings_preflight.py).
+      # No `if:` and no continue-on-error, on purpose.
+      # ---------------------------------------------------------------------
+      - name: Settings preflight
+        run: |
+          python3 .claude/skills/dev-flow/scripts/settings_preflight.py \
+            --extra-settings .claude/skills/dev-flow/assets/ci-deny-settings.json
+
+      # Node 22, not 20. @anthropic-ai/claude-code declares
+      # `engines: { node: ">=22.0.0" }`, and on Node 20 npm quietly installs the
+      # newest version that still satisfies 20 rather than failing. The job then
+      # runs an old Claude Code: the first live run of this workflow died on
+      # `unknown option '--permission-prompts'`, a flag 2.1.259 added. Node 20 is
+      # also past end of life.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      # ---------------------------------------------------------------------
+      # Trust check. Runs before anything is fetched and long before a model
+      # starts. Two events can reach this job and they are checked differently.
+      #
+      # `issues: labeled` -- the issue author AND the actor who applied the
+      # label must both have write access. The label is the trigger, so an
+      # outsider's issue labelled by a maintainer is still an outsider's text
+      # reaching the pipeline; both halves have to be trusted.
+      #
+      # `workflow_dispatch` -- the triage bot (build item 23) starts this job
+      # with `gh workflow run`, because a label it applies with GITHUB_TOKEN
+      # triggers no workflow (C1). GitHub does not say which workflow dispatched
+      # a run: every dispatch made with the workflow token shows the actor
+      # `github-actions[bot]`, and only this repository's own workflows hold
+      # that token. So the actor must be a write-access user or that bot, and
+      # the issue author must have write access either way.
+      #
+      # Fails closed: an API lookup that errors is "no access", not "unknown".
+      # ---------------------------------------------------------------------
+      - name: Trust check
+        id: trust
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          LABEL_ACTOR: ${{ github.event.sender.login }}
+          DISPATCH_ACTOR: ${{ github.actor }}
+        run: |
+          set -uo pipefail
+
+          has_write() {
+            local user="$1"
+            [ -n "$user" ] || return 1
+            local perm
+            perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${user}/permission" \
+                     --jq .permission 2>/dev/null) || return 1
+            case "$perm" in admin|maintain|write) return 0 ;; *) return 1 ;; esac
+          }
+
+          AUTHOR=$(gh issue view "$ISSUE" --json author --jq .author.login 2>/dev/null || echo "")
+          REASON=""
+
+          if [ -z "$AUTHOR" ]; then
+            REASON="the issue author could not be read, so trust cannot be established"
+          elif ! has_write "$AUTHOR"; then
+            REASON="the issue author (@${AUTHOR}) does not have write access to this repository"
+          elif [ "$EVENT" = "issues" ]; then
+            if ! has_write "$LABEL_ACTOR"; then
+              REASON="the actor who applied the label (@${LABEL_ACTOR}) does not have write access"
+            fi
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$DISPATCH_ACTOR" != "github-actions[bot]" ] && ! has_write "$DISPATCH_ACTOR"; then
+              REASON="the dispatching actor (@${DISPATCH_ACTOR}) is neither this repository's workflow token nor a user with write access"
+            fi
+          else
+            REASON="unexpected event type ${EVENT}"
+          fi
+
+          if [ -n "$REASON" ]; then
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+            echo "TRUST CHECK FAILED: $REASON" >> "$GITHUB_STEP_SUMMARY"
+            echo "TRUST CHECK FAILED: $REASON"
+          else
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
+            echo "Trust check passed (event: ${EVENT}, author: @${AUTHOR})." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Stop — the trust check did not pass
+        if: steps.trust.outputs.trusted == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REASON: ${{ steps.trust.outputs.reason }}
+        run: |
+          {
+            echo "**The spec pipeline did not run.**"
+            echo
+            echo "Reason: ${REASON}."
+            echo
+            echo "This job hands issue text to a model that can write to the repository,"
+            echo "so it only starts for issues opened by someone with write access, labelled"
+            echo "or dispatched by someone with write access. Nothing was generated and no"
+            echo "model saw the issue."
+          } > trust-comment.md
+          gh issue comment "$ISSUE" --body-file trust-comment.md
+          gh issue edit "$ISSUE" --remove-label "spec:auto" || true
+
+      # ---------------------------------------------------------------------
+      # Fetch, then envelope. Both run with no model present. The fetch holds
+      # GH_TOKEN; nothing downstream of the envelope does.
+      # ---------------------------------------------------------------------
+      - name: Fetch the issue
+        if: steps.trust.outputs.trusted == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p .dev-flow-run
+          gh issue view "$ISSUE" \
+            --json number,title,url,state,author,labels,body,comments \
+            > .dev-flow-run/issue-raw.json
+
+      - name: Wrap the issue as untrusted data
+        if: steps.trust.outputs.trusted == 'true'
+        run: |
+          set -euo pipefail
+          # Exits non-zero on empty or unreadable input, which is what keeps a
+          # failed fetch from reaching the model as an empty -- and therefore
+          # "thin" -- issue. A failed fetch should fail the job, not be reported
+          # back to the author as a content problem.
+          python3 .claude/skills/dev-flow/scripts/issue_envelope.py \
+            --input .dev-flow-run/issue-raw.json \
+            --issue "$ISSUE" \
+            --output "$ENVELOPE" \
+            --report .dev-flow-run/envelope-report.json
+          rm -f .dev-flow-run/issue-raw.json
+          echo "Issue envelope:"
+          cat .dev-flow-run/envelope-report.json
+          {
+            echo "### Issue envelope"
+            echo '```json'
+            cat .dev-flow-run/envelope-report.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Claude Code
+        if: steps.trust.outputs.trusted == 'true'
+        run: npm install -g @anthropic-ai/claude-code
+
+      # The second half of the preflight, which needs Claude Code installed:
+      # the same files against Claude Code's own schema, via `claude doctor`
+      # (no model call, no token). A file can parse and hold every shipped
+      # entry and still fail validation on a key dev-flow never touches -- and
+      # then it is dropped whole, exactly as if it did not parse.
+      - name: Settings preflight (Claude Code's schema)
+        if: steps.trust.outputs.trusted == 'true'
+        run: |
+          python3 .claude/skills/dev-flow/scripts/settings_preflight.py \
+            --extra-settings .claude/skills/dev-flow/assets/ci-deny-settings.json \
+            --doctor
+
+      # ---------------------------------------------------------------------
+      # The model step. Note what is NOT here: GH_TOKEN.
+      #
+      # --permission-mode dontAsk is the documented mode for locked-down CI:
+      # anything no rule covers is denied rather than queued for a prompt that
+      # nobody will answer. --permission-prompts none (2.1.259+) makes those
+      # refusals explicit and lists them in `permission_denials`, which is what
+      # the assertion step below reads. --allowedTools is a grant and grants
+      # only what the stage needs; the real limit is the deny file.
+      # ---------------------------------------------------------------------
+      - name: Run the stage
+        if: steps.trust.outputs.trusted == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          claude -p "/${STAGE} ${ISSUE}" \
+            --permission-mode dontAsk \
+            --permission-prompts none \
+            --settings .claude/skills/dev-flow/assets/ci-deny-settings.json \
+            --allowedTools "Read,Edit(specs/**),Grep,Glob,Bash(ls *)" \
+            --output-format json \
+            > run.json 2> run.stderr.txt && code=0 || code=$?
+          # Recorded, not acted on. A failure inside a -p run still exits 0 and
+          # prints the failure as the result, so the next step is the real judge.
+          echo "claude exit: ${code}"
+          sed -e 's/[A-Za-z0-9_-]\{24,\}/[redacted]/g' run.stderr.txt | tail -20
+
+      # ---------------------------------------------------------------------
+      # Judge the run on its JSON, never on its exit status: a failure inside a
+      # -p run prints as the result on stdout and still exits 0 (q2 §5.3).
+      #
+      # The empty result is the load-bearing one. If a command's ! preprocessing
+      # line is refused, Claude Code aborts the whole invocation and the model
+      # never sees the command -- and that abort reports as exit 0, is_error
+      # false, subtype "success", an empty result and num_turns 0. Observed on
+      # 2.1.280. Without this check it would read as a clean run that simply
+      # wrote nothing, which is indistinguishable from the refusal path below,
+      # and every issue would come back "missing the minimum payload".
+      #
+      # num_turns alone will not do: /acceptance runs with `context: fork`, and
+      # a forked skill does its work in a subagent, so a healthy /acceptance run
+      # also reports num_turns 0. Observed on 2.1.280. The result text is what
+      # separates the two.
+      # ---------------------------------------------------------------------
+      - name: Assert the run actually ran
+        if: steps.trust.outputs.trusted == 'true'
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+
+          raw = pathlib.Path("run.json").read_text(encoding="utf-8", errors="replace")
+          try:
+              data = json.loads(raw)
+          except json.JSONDecodeError:
+              print("run.json is not JSON — the run did not complete:")
+              print(raw[:2000])
+              sys.exit(1)
+
+          result = data.get("result") or ""
+          turns = data.get("num_turns", 0)
+          denials = data.get("permission_denials") or []
+
+          lines = [
+              "### Claude run",
+              "",
+              f"- `is_error`: {data.get('is_error')}",
+              f"- `num_turns`: {turns}",
+              f"- `total_cost_usd`: {data.get('total_cost_usd')}",
+              f"- `permission_denials`: {len(denials)}",
+          ]
+          for d in denials:
+              ti = d.get("tool_input") or {}
+              what = ti.get("command") or ti.get("file_path") or ""
+              lines.append(f"  - `{d.get('tool_name')}` — `{what}`")
+          for key in ("plugin_errors", "mcp_server_errors"):
+              if data.get(key):
+                  lines.append(f"- `{key}`: {json.dumps(data[key])}")
+
+          report = "\n".join(lines)
+          # Both places on purpose. The summary is where a person looks; the log
+          # is the only one a script, or a later audit, can read back -- and what
+          # was refused is the evidence that the confinement held.
+          print(report)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+                  "a", encoding="utf-8") as fh:
+              fh.write("\n" + report + "\n")
+
+          # The model text is the only part of this that is safe to reuse: it is
+          # what the refusal path posts back to the issue.
+          pathlib.Path("result.txt").write_text(result, encoding="utf-8")
+
+          problems = []
+          if data.get("is_error"):
+              problems.append("is_error is true")
+          if not result.strip():
+              problems.append(
+                  f"the run produced no result text (num_turns={turns}). The model "
+                  f"most likely never ran: a ! preprocessing line in the command "
+                  f"was refused, which aborts the invocation silently. Check the "
+                  f"command's allowed-tools against ci-deny-settings.json, and "
+                  f"check that its ! lines use $ARGUMENTS rather than $1.")
+          if data.get("plugin_errors"):
+              problems.append(f"plugin_errors: {data['plugin_errors']}")
+          if data.get("mcp_server_errors"):
+              problems.append(f"mcp_server_errors: {data['mcp_server_errors']}")
+
+          if problems:
+              for p in problems:
+                  print(f"FAIL: {p}")
+              sys.exit(1)
+          print(f"Run completed: {turns} turns, {len(denials)} permission denial(s).")
+          PY
+
+      # The agent is instructed to refuse a thin issue rather than invent a PRD.
+      # That refusal is a successful outcome of this job, not a failed one — it
+      # means the gate held. Route it back to the issue and stop.
+      - name: Detect refusal
+        id: check
+        if: steps.trust.outputs.trusted == 'true'
+        run: |
+          if ls specs/${ISSUE}-*/prd.md >/dev/null 2>&1; then
+            echo "wrote=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "wrote=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post blocking questions back to the issue
+        if: steps.trust.outputs.trusted == 'true' && steps.check.outputs.wrote == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "**No PRD was generated — the issue is missing the minimum payload.**"
+            echo
+            echo "The pipeline is designed to refuse here rather than invent the gaps."
+            echo
+            tail -c 4000 result.txt
+          } > comment.md
+          gh issue comment "$ISSUE" --body-file comment.md
+          gh issue edit "$ISSUE" --remove-label "spec:auto" --add-label "spec:blocked"
+
+      - name: Validate
+        if: steps.trust.outputs.trusted == 'true' && steps.check.outputs.wrote == 'true'
+        id: validate
+        run: |
+          set +e
+          python3 .claude/skills/dev-flow/scripts/validate_prd.py specs/${ISSUE}-*/prd.md | tee validation.txt
+          # ${PIPESTATUS[0]}, not $?: the runner's default shell has no pipefail,
+          # so $? here is tee's exit and would always read 0.
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          python3 .claude/skills/dev-flow/scripts/coverage.py specs/${ISSUE}-* | tee -a validation.txt
+          set -e
+
+      # Exit 1 still opens the PR. A malformed PRD in a PR is reviewable and
+      # fixable; a malformed PRD that never left CI is invisible.
+      - name: Open the PR
+        if: steps.trust.outputs.trusted == 'true' && steps.check.outputs.wrote == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="spec/${ISSUE}"
+          git config user.name "spec-pipeline"
+          git config user.email "spec-pipeline@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add specs/
+          git commit -m "spec: PRD for #${ISSUE}"
+          git push -u origin "$BRANCH" --force
+          {
+            echo "PRD for #${ISSUE}, generated from the issue."
+            echo
+            echo '```'
+            cat validation.txt
+            echo '```'
+            echo
+            case "${{ steps.validate.outputs.code }}" in
+              0) echo "Structurally clean." ;;
+              1) echo "**Structural errors** — see above." ;;
+              2) echo "**Blocked on input.** Well-formed and waiting on numbers only a human has. Do not fill these in to get a green tick." ;;
+            esac
+            echo
+            echo "Next: review, then \`/plan ${ISSUE}\` locally. Planning is not automated — it is the human gate."
+          } > pr.md
+          gh pr create --title "spec: PRD for #${ISSUE}" --body-file pr.md --base "${{ github.event.repository.default_branch }}" || \
+            gh pr edit "$BRANCH" --body-file pr.md

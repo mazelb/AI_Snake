@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# dev-flow bootstrap: Playwright Test output, dev-flow run state
+playwright-report/
+test-results/
+.dev-flow-run/

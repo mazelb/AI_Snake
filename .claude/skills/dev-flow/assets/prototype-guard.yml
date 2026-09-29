@@ -1,0 +1,46 @@
+name: prototype-guard
+
+# Throwaway code is only throwaway if something stops it being merged. Once a
+# prototype lands on main it stops being a probe and starts being a foundation
+# nobody designed — which is the specific failure the throwaway-branch convention
+# exists to prevent.
+
+on:
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  guard:
+    # Pinned like spec-pipeline.yml, not `ubuntu-latest`, which migrates to
+    # Ubuntu 26 on 19 October 2026. Bump this deliberately, with a run to prove it.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Block prototype branches and prototype paths
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          FAILED=0
+
+          case "$HEAD_REF" in
+            proto/*)
+              echo "::error::'$HEAD_REF' is a prototype branch and must not merge to main."
+              echo "Fold the verdict into the spec with /verdict, then delete the branch."
+              FAILED=1
+              ;;
+          esac
+
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q '^prototypes/'; then
+            echo "::error::This PR touches prototypes/. Prototype code does not belong on main —"
+            echo "only the decision it produced does."
+            FAILED=1
+          fi
+
+          exit $FAILED

@@ -1,0 +1,12 @@
+{
+  "domain": "greenfield",
+  "autonomy": "manual",
+  "commands": {
+    "install": "",
+    "lint": "",
+    "typecheck": "",
+    "test": "",
+    "acceptance": "",
+    "build": ""
+  }
+}

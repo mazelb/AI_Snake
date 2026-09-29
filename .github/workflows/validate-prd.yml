@@ -1,0 +1,62 @@
+name: validate-prd
+
+on:
+  pull_request:
+    paths:
+      - "specs/**/prd.md"
+
+# The blocked-on-input comment needs write access to the PR. Repositories now
+# default to a read-only token, and without this the comment fails with a 403,
+# turning a well-formed PRD's exit 2 into a red job.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    # Pinned like spec-pipeline.yml, not `ubuntu-latest`, which migrates to
+    # Ubuntu 26 on 19 October 2026. Bump this deliberately, with a run to prove it.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Validate PRD structure
+        id: validate
+        run: |
+          set +e
+          python .claude/skills/dev-flow/scripts/validate_prd.py specs/*/prd.md | tee result.txt
+          # ${PIPESTATUS[0]}, not $?: the runner's default shell has no pipefail,
+          # so $? here is tee's exit and would always read 0.
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          set -e
+
+      # Exit 1 means the document is malformed — that is the author's (or the
+      # agent's) job to fix, so it blocks. Exit 2 means the document is correct
+      # and waiting on a human to supply a number; that must never block, or the
+      # pipeline teaches everyone to invent values to get green.
+      - name: Comment blocked items
+        if: steps.validate.outputs.code == '2'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const body = "**PRD is well-formed and blocked on missing input.**\n\n"
+              + "```\n" + fs.readFileSync('result.txt', 'utf8').slice(0, 60000) + "\n```\n\n"
+              + "_Not a failure. Route these to the people who own the numbers. "
+              + "Do not fill them in to make CI green._";
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Fail on structural errors
+        if: steps.validate.outputs.code == '1'
+        run: |
+          echo "PRD has structural errors — see the output above."
+          exit 1

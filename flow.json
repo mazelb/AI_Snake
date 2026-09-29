@@ -1,0 +1,13 @@
+{
+  "domain": "greenfield",
+  "autonomy": "manual",
+  "commands": {
+    "install": "npm ci",
+    "lint": "",
+    "typecheck": "npx tsc --noEmit",
+    "test": "npx vitest run --passWithNoTests",
+    "acceptance": "npx vitest run -t AC- --reporter=default --reporter=junit --outputFile.junit=test-results/acceptance-junit.xml",
+    "build": "npm run build"
+  },
+  "acceptance_junit": "test-results/acceptance-junit.xml"
+}
