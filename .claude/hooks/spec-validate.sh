@@ -25,6 +25,10 @@ if command -v jq >/dev/null 2>&1; then
 else
   FILE="$(printf '%s' "$INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 fi
+# On Windows Claude Code passes a backslashed path (E:\repo\specs\1-x\prd.md), which
+# the patterns below never match, so the hook said nothing there. Read each
+# backslash as / (the sed route leaves them doubled; // is still a path).
+FILE="${FILE//\\//}"
 
 # Only care about spec artifacts. Pick the validator by filename.
 case "$FILE" in
