@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Grid from './components/Grid.tsx';
 import Controls from './components/Controls.tsx';
 import { GameStatus, Direction, Point, LevelConfig } from './types';
-import { GRID_SIZE, INITIAL_SPEED, INITIAL_SNAKE, INITIAL_FOOD, DIRECTIONS, SPEED_DECREMENT, MIN_SPEED, DEFAULT_LEVEL } from './constants';
+import { GRID_SIZE, INITIAL_SPEED, INITIAL_SNAKE, INITIAL_FOOD, SPEED_DECREMENT, MIN_SPEED, DEFAULT_LEVEL } from './constants';
 import { generateLevel } from './services/geminiService';
+import { advanceSnake } from './gameLogic';
 
 // Custom hook for interval handling
 function useInterval(callback: () => void, delay: number | null) {
@@ -103,58 +104,21 @@ const App: React.FC = () => {
     if (status !== GameStatus.PLAYING) return;
 
     setDirection(nextDirection);
-    const move = DIRECTIONS[nextDirection];
-    const head = snake[0];
-    
-    const newHead = {
-      x: head.x + move.x,
-      y: head.y + move.y,
-    };
+    const outcome = advanceSnake(snake, nextDirection, food, level.walls);
 
-    // Check Wall Collisions (Boundaries)
-    if (
-      newHead.x < 0 || 
-      newHead.x >= GRID_SIZE || 
-      newHead.y < 0 || 
-      newHead.y >= GRID_SIZE
-    ) {
+    if (outcome.status === GameStatus.GAME_OVER) {
       handleGameOver();
       return;
     }
 
-    // Check Wall Collisions (Level Walls)
-    if (level.walls.some(w => w.x === newHead.x && w.y === newHead.y)) {
-      handleGameOver();
-      return;
-    }
-
-    // Check Self Collision
-    // Note: We don't check the tail (last element) because it will move forward unless we just ate
-    // However, for simplicity in standard snake logic, hitting any current body part is game over.
-    // We do this check against the *current* snake state.
-    if (snake.some(s => s.x === newHead.x && s.y === newHead.y)) {
-       // Edge case: if the tail is moving away, we might be fine, but strictly usually game over.
-       // We'll allow chasing tail if exact coordination, but typically index 0 to length-1 are hazards.
-       // Let's keep it simple: any overlap is death.
-       handleGameOver();
-       return;
-    }
-
-    const newSnake = [newHead, ...snake];
-
-    // Check Food
-    if (newHead.x === food.x && newHead.y === food.y) {
+    if (outcome.ate) {
       setScore(s => s + 10);
       setSpeed(s => Math.max(MIN_SPEED, s - SPEED_DECREMENT));
-      // Don't pop the tail -> Grow
       // Spawn new food
-      setFood(getRandomPoint(newSnake, level.walls));
-    } else {
-      // Remove tail
-      newSnake.pop();
+      setFood(getRandomPoint(outcome.snake, level.walls));
     }
 
-    setSnake(newSnake);
+    setSnake(outcome.snake);
 
   }, [snake, nextDirection, status, food, level, getRandomPoint]);
 
