@@ -37,6 +37,26 @@ describe('advanceSnake', () => {
     expect(result.snake).toBe(snake);
   });
 
+  describe('REQ-001: the head may enter the cell the tail vacates', () => {
+    // A 2x2 loop: head (5,5) moving DOWN lands on the tail at (5,6).
+    const loop = [{ x: 5, y: 5 }, { x: 6, y: 5 }, { x: 6, y: 6 }, { x: 5, y: 6 }];
+
+    it('is not fatal on a tick without food', () => {
+      const result = advanceSnake(loop, Direction.DOWN, farFood, []);
+      expect(result.status).toBe(GameStatus.PLAYING);
+      expect(result.ate).toBe(false);
+      expect(result.snake).toHaveLength(4);
+      expect(result.snake[0]).toEqual({ x: 5, y: 6 });
+      expect(result.snake).toEqual([{ x: 5, y: 6 }, { x: 5, y: 5 }, { x: 6, y: 5 }, { x: 6, y: 6 }]);
+    });
+
+    it('stays fatal on an eating tick, where the tail does not move', () => {
+      const result = advanceSnake(loop, Direction.DOWN, { x: 5, y: 6 }, []);
+      expect(result.status).toBe(GameStatus.GAME_OVER);
+      expect(result.snake).toBe(loop);
+    });
+  });
+
   describe('REQ-002: body segments other than the tail are fatal', () => {
     // A snake whose head, moving UP, lands on segment i. The other segments
     // sit on distinct cells along the top row, clear of the head's path.

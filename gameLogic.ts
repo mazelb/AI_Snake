@@ -42,15 +42,16 @@ export function advanceSnake(
     return gameOver;
   }
 
-  // Check Self Collision
-  if (snake.some(s => samePoint(s, newHead))) {
+  // Check Self Collision. The tail vacates its cell this tick unless we eat,
+  // so it is only a hazard on an eating tick.
+  const ate = samePoint(newHead, food);
+  const hazards = ate ? snake : snake.slice(0, -1);
+  if (hazards.some(s => samePoint(s, newHead))) {
     return gameOver;
   }
 
   const newSnake = [newHead, ...snake];
 
-  // Check Food
-  const ate = samePoint(newHead, food);
   if (!ate) {
     // Remove tail
     newSnake.pop();
