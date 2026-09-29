@@ -19,6 +19,7 @@ Exit codes: 0 clean · 1 structural errors · 2 blocked on missing input
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 # Piping into head/tail is normal usage; a broken pipe should not print a traceback.
@@ -33,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from spec_lib import (  # noqa: E402
     ERROR, WARN, AC_HEADING_RE, Doc, Finding,
     check_common, check_frontmatter, exit_code, fingerprint, render, requirement_ids,
+    section_lines,
 )
 
 REQUIRED_FRONTMATTER = ["title", "issue", "prd", "prd_fingerprint", "status", "created"]
@@ -138,8 +140,11 @@ def validate(path: Path) -> tuple[list[Finding], str]:
                                 "No '## Not covered' section. An untested requirement nobody has "
                                 "noticed is the failure mode this section exists to prevent."))
 
+    # A requirement named under 'Not covered' is accounted for, as the error below
+    # says; without this, a withdrawn one could only pass with an invented case.
+    not_covered = " ".join(text for _, text in section_lines(doc, "Not covered") or [])
     for req in known_reqs:
-        if req not in verified:
+        if req not in verified and not re.search(rf"\b{req}\b", not_covered):
             findings.append(Finding(ERROR, "req.unverified", 1,
                                     f"{req} has no acceptance case. Either write one or list it "
                                     "under 'Not covered' with a reason."))
