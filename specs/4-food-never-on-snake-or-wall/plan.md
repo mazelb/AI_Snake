@@ -63,14 +63,14 @@ full board is what the player sees.
 
 - Satisfies: REQ-005, REQ-003
 - Touches: App.tsx, gameLogic.ts, gameLogic.test.ts
-- Seams: a pure function in `gameLogic.ts` that, given the start snake and the new level's walls, returns the placement for a fresh game (the same `FoodPlacement` shape). `handleGenerateLevel` uses its result directly.
+- Seams: `placeFoodForNewLevel(startSnake, walls, random)` exported from `gameLogic.ts`: given the start snake and the new level's walls, it returns the placement for a fresh game (the same `FoodPlacement` shape as `placeFood`), drawing from `random` once per placement as `placeFood` does. `handleGenerateLevel` uses its result directly.
 - Done when: `handleGenerateLevel` places food exactly once, from the new level's walls; `resetGame` no longer places food against a stale `level.walls`. Tests at the seam: a new level whose walls leave cells free gets food on a free cell of the new level; a new level whose walls cover every cell gives GAME_OVER. `npx tsc --noEmit` and `npx vitest run` pass.
 
 ### TASK-004 Count the final tick's points in the high score
 
 - Satisfies: REQ-004
 - Touches: App.tsx, gameLogic.ts, gameLogic.test.ts
-- Seams: a pure function in `gameLogic.ts` that, given the score before the tick, the points earned on it and the current high score, returns the new high score. `handleGameOver` uses it with the tick's final score, not the stale closure value.
+- Seams: `highScoreAfterTick(scoreBeforeTick, pointsEarnedOnTick, highScore)` exported from `gameLogic.ts`: it returns the new high score. `handleGameOver` uses it with the tick's final score, not the stale closure value.
 - Done when: tests at the seam show 90 + 10 against 95 gives 100, and a lower final score keeps the old high score; `gameLoop` passes the final score to the game-over path on both a collision and a full board. `npx tsc --noEmit` and `npx vitest run` pass.
 
 ## Sequencing
