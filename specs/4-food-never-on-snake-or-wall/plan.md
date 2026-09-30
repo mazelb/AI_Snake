@@ -3,7 +3,7 @@ title: Always place food on a free cell
 issue: mazelb/AI_Snake#4
 prd: specs/4-food-never-on-snake-or-wall/prd.md
 owner: mazelb
-status: approved
+status: draft
 created: 2026-09-30
 ---
 
@@ -59,17 +59,29 @@ IDLE; it must skip that when placement ended the game. The eating branch of
 `gameLoop` still calls `setSnake(outcome.snake)` when the board fills, so the final
 full board is what the player sees.
 
+### TASK-003 Place food once after level generation, against the new level's walls
+
+- Satisfies: REQ-005, REQ-003
+- Touches: App.tsx, gameLogic.ts, gameLogic.test.ts
+- Seams: a pure function in `gameLogic.ts` that, given the start snake and the new level's walls, returns the placement for a fresh game (the same `FoodPlacement` shape). `handleGenerateLevel` uses its result directly.
+- Done when: `handleGenerateLevel` places food exactly once, from the new level's walls; `resetGame` no longer places food against a stale `level.walls`. Tests at the seam: a new level whose walls leave cells free gets food on a free cell of the new level; a new level whose walls cover every cell gives GAME_OVER. `npx tsc --noEmit` and `npx vitest run` pass.
+
+### TASK-004 Count the final tick's points in the high score
+
+- Satisfies: REQ-004
+- Touches: App.tsx, gameLogic.ts, gameLogic.test.ts
+- Seams: a pure function in `gameLogic.ts` that, given the score before the tick, the points earned on it and the current high score, returns the new high score. `handleGameOver` uses it with the tick's final score, not the stale closure value.
+- Done when: tests at the seam show 90 + 10 against 95 gives 100, and a lower final score keeps the old high score; `gameLoop` passes the final score to the game-over path on both a collision and a full board. `npx tsc --noEmit` and `npx vitest run` pass.
+
 ## Sequencing
 
-Strictly sequential: TASK-001 → TASK-002. TASK-002 imports `placeFood` and depends
+Strictly sequential: TASK-001 → TASK-002 → TASK-003 → TASK-004. TASK-002 imports `placeFood` and depends
 on TASK-001's tests as its only automated check.
 
 ## Out of scope
 
 - A "board full" win screen or score bonus. The PRD non-goal says a full board is simply GAME_OVER.
-- Any change to `advanceSnake`, movement, speed, scoring, or high-score logic.
-- Fixing the pre-existing stale `score` read in `handleGameOver`. It already drops the last food's 10 points from the high score on a normal death. See Risks for how it touches REQ-003.
-- The `resetGame(); setFood(...)` double placement in `handleGenerateLevel`. `resetGame` rolls food against the *old* `level.walls` (a stale closure), and the second call corrects it. TASK-002 keeps the second call and does not restructure the handler further.
+- Any change to `advanceSnake`, movement, speed or scoring. High-score logic changes only in TASK-004.
 - Changing `INITIAL_FOOD` in `constants.ts`. It is only the initial state before the first `resetGame`; it is not a fallback.
 - Gemini level validation (e.g. rejecting levels whose walls cover the start snake).
 

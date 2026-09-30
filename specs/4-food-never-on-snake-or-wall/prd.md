@@ -27,15 +27,15 @@ late in a long game or on dense generated levels.
 
 ## Success metric
 
-- Metric: number of the food-placement scenarios in REQ-001–REQ-003 covered by a passing automated test
-- Current baseline: 0 of 3 — `getRandomPoint` has no test and is not in `gameLogic.ts`
-- Target: 3 of 3
+- Metric: number of the food-placement scenarios in REQ-001–REQ-005 covered by a passing automated test
+- Current baseline: 3 of 5 — `getRandomPoint` has no test and is not in `gameLogic.ts`
+- Target: 5 of 5
 - Source: vitest run output
 
 ## Non-goals
 
 - Not designing a "board full" win (a win screen, a score bonus); a full board ends the game for now (REQ-003).
-- No change to movement, collision, speed, scoring, or high score handling (`advanceSnake` in `gameLogic.ts` is untouched).
+- No change to movement, collision, speed or scoring (`advanceSnake` in `gameLogic.ts` is untouched). High score handling changes only as REQ-004 says.
 - No change to Gemini level generation.
 - No visual or UI changes.
 
@@ -70,6 +70,26 @@ status becomes GAME_OVER, and no food is placed on an occupied cell.
 sets the status to GAME_OVER and does not return an occupied cell as the food
 position. Covered by an automated test.
 
+### REQ-004 [P0] The high score counts the tick that ended the game
+
+When a game ends, the high score is compared against the score including every
+point earned on the tick that ended it, including the food eaten on the tick that
+fills the board.
+
+**Acceptance:** Given a score of 90 and a high score of 95, when the snake eats on
+a tick and that tick ends the game (a full board), the saved high score is 100.
+Covered by an automated test.
+
+### REQ-005 [P0] A new level places food once, against its own walls
+
+After a level is generated, food is placed exactly once, using the new level's
+walls, never the previous level's.
+
+**Acceptance:** Given a previous level whose walls cover a cell and a new level
+that leaves it free, the food placed after generation is never on one of the new
+level's walls, and a full new board ends the game rather than leaving old food on
+the board. Covered by an automated test.
+
 ## Constraints
 
 - No new runtime dependencies: the app runs in AI Studio from the import map in `index.html` (source: issue #4).
@@ -86,3 +106,5 @@ position. Covered by an automated test.
 | None | — | — |
 
 Answered 2026-09-30 by mazelb: when no cell is free of the snake and the walls, the game ends (GAME_OVER) until a real "win" is designed. Added as REQ-003.
+
+Widened 2026-09-30 by mazelb after `/review 4`: REQ-004 and REQ-005 added, and the high-score non-goal narrowed.
