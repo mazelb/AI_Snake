@@ -3,7 +3,7 @@ title: Always place food on a free cell
 issue: mazelb/AI_Snake#4
 prd: specs/4-food-never-on-snake-or-wall/prd.md
 owner: mazelb
-status: draft
+status: approved
 created: 2026-09-30
 ---
 
