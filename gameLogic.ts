@@ -7,7 +7,55 @@ export interface TickOutcome {
   ate: boolean;
 }
 
+export type FoodPlacement =
+  | { status: GameStatus.PLAYING; food: Point }
+  | { status: GameStatus.GAME_OVER; food: null };
+
 const samePoint = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
+
+// Pick food from the cells free of snake and walls, scanned row by row, so
+// every value of random() in [0, 1) lands on a free cell. A full board is
+// GAME_OVER.
+export function placeFood(
+  snake: Point[],
+  walls: Point[],
+  random: () => number = Math.random,
+): FoodPlacement {
+  const key = (p: Point) => `${p.x},${p.y}`;
+  const occupied = new Set([...snake, ...walls].map(key));
+
+  const free: Point[] = [];
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      if (!occupied.has(key({ x, y }))) free.push({ x, y });
+    }
+  }
+
+  if (free.length === 0) {
+    return { status: GameStatus.GAME_OVER, food: null };
+  }
+  return { status: GameStatus.PLAYING, food: free[Math.floor(random() * free.length)] };
+}
+
+// The single food placement for a freshly generated level: the start snake
+// against the new level's walls, never the previous level's.
+export function placeFoodForNewLevel(
+  startSnake: Point[],
+  walls: Point[],
+  random: () => number = Math.random,
+): FoodPlacement {
+  return placeFood(startSnake, walls, random);
+}
+
+// The high score once a game ends, counting the points earned on the tick
+// that ended it (e.g. the food that filled the board).
+export function highScoreAfterTick(
+  scoreBeforeTick: number,
+  pointsEarnedOnTick: number,
+  highScore: number,
+): number {
+  return Math.max(highScore, scoreBeforeTick + pointsEarnedOnTick);
+}
 
 // One game tick: move the head, check collisions, then grow or drop the tail.
 // On GAME_OVER the input snake is returned unchanged.

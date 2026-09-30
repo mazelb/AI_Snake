@@ -4,7 +4,7 @@ import Controls from './components/Controls.tsx';
 import { GameStatus, Direction, Point, LevelConfig } from './types';
 import { GRID_SIZE, INITIAL_SPEED, INITIAL_SNAKE, INITIAL_FOOD, SPEED_DECREMENT, MIN_SPEED, DEFAULT_LEVEL } from './constants';
 import { generateLevel } from './services/geminiService';
-import { advanceSnake } from './gameLogic';
+import { advanceSnake, highScoreAfterTick, placeFood, placeFoodForNewLevel } from './gameLogic';
 
 // Custom hook for interval handling
 function useInterval(callback: () => void, delay: number | null) {
@@ -37,34 +37,6 @@ const App: React.FC = () => {
   const [level, setLevel] = useState<LevelConfig>(DEFAULT_LEVEL);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // Helper: Get random point not on snake or walls
-  const getRandomPoint = useCallback((currentSnake: Point[], currentWalls: Point[]): Point => {
-    let newPoint: Point;
-    let isValid = false;
-    
-    // Safety break for nearly full grids
-    let attempts = 0;
-    const maxAttempts = 1000;
-
-    do {
-      newPoint = {
-        x: Math.floor(Math.random() * GRID_SIZE),
-        y: Math.floor(Math.random() * GRID_SIZE),
-      };
-
-      const onSnake = currentSnake.some(s => s.x === newPoint.x && s.y === newPoint.y);
-      const onWall = currentWalls.some(w => w.x === newPoint.x && w.y === newPoint.y);
-      
-      if (!onSnake && !onWall) {
-        isValid = true;
-      }
-      attempts++;
-    } while (!isValid && attempts < maxAttempts);
-
-    if (!isValid) return { x: 0, y: 0 }; // Fallback
-    return newPoint;
-  }, []);
 
   // Keyboard controls
   useEffect(() => {
@@ -107,27 +79,47 @@ const App: React.FC = () => {
     const outcome = advanceSnake(snake, nextDirection, food, level.walls);
 
     if (outcome.status === GameStatus.GAME_OVER) {
-      handleGameOver();
+      handleGameOver(score, 0);
       return;
     }
 
     if (outcome.ate) {
       setScore(s => s + 10);
       setSpeed(s => Math.max(MIN_SPEED, s - SPEED_DECREMENT));
-      // Spawn new food
-      setFood(getRandomPoint(outcome.snake, level.walls));
+      // Spawn new food; a full board ends the game, counting this food's points,
+      // but still shows the final snake
+      spawnFood(outcome.snake, level.walls, score, 10);
     }
 
     setSnake(outcome.snake);
 
-  }, [snake, nextDirection, status, food, level, getRandomPoint]);
+  }, [snake, nextDirection, status, food, level, score, highScore]);
 
-  const handleGameOver = () => {
+  // Place food on a free cell, or end the game when the board is full.
+  // Returns false when the game ended. The score arguments are the tick's,
+  // for the high score; after a reset both are 0.
+  const spawnFood = (
+    currentSnake: Point[],
+    currentWalls: Point[],
+    scoreBeforeTick = 0,
+    pointsEarnedOnTick = 0,
+  ): boolean => {
+    const outcome = placeFood(currentSnake, currentWalls);
+    if (outcome.status === GameStatus.GAME_OVER) {
+      handleGameOver(scoreBeforeTick, pointsEarnedOnTick);
+      return false;
+    }
+    setFood(outcome.food);
+    return true;
+  };
+
+  const handleGameOver = (scoreBeforeTick: number, pointsEarnedOnTick: number) => {
     setStatus(GameStatus.GAME_OVER);
-    if (score > highScore) {
-      setHighScore(score);
+    const newHighScore = highScoreAfterTick(scoreBeforeTick, pointsEarnedOnTick, highScore);
+    if (newHighScore > highScore) {
+      setHighScore(newHighScore);
       // Optional: Save to local storage
-      localStorage.setItem('neon-snake-highscore', score.toString());
+      localStorage.setItem('neon-snake-highscore', newHighScore.toString());
     }
   };
 
@@ -144,7 +136,7 @@ const App: React.FC = () => {
   const handleStart = () => {
     // Reset snake for a fresh start if coming from Game Over or fresh load
     if (status === GameStatus.IDLE || status === GameStatus.GAME_OVER) {
-      resetGame();
+      if (!resetGame()) return;
     }
     setStatus(GameStatus.PLAYING);
   };
@@ -152,14 +144,22 @@ const App: React.FC = () => {
   const handlePause = () => setStatus(GameStatus.PAUSED);
   const handleResume = () => setStatus(GameStatus.PLAYING);
   
-  const resetGame = () => {
+  // Snake, direction, score and speed back to their start values; food is
+  // placed by the caller, against whichever walls apply.
+  const resetRound = () => {
     setSnake(INITIAL_SNAKE);
     setDirection(Direction.UP);
     setNextDirection(Direction.UP);
     setScore(0);
     setSpeed(INITIAL_SPEED);
-    setFood(getRandomPoint(INITIAL_SNAKE, level.walls));
+  };
+
+  // Returns false when food could not be placed and the game ended.
+  const resetGame = (): boolean => {
+    resetRound();
+    if (!spawnFood(INITIAL_SNAKE, level.walls)) return false;
     setStatus(GameStatus.IDLE);
+    return true;
   };
 
   const handleReset = () => {
@@ -170,19 +170,27 @@ const App: React.FC = () => {
     setStatus(GameStatus.GENERATING_LEVEL);
     setLoadingMessage("Consulting Gemini AI...");
     setErrorMsg(null);
+    let ended = false;
     try {
       const newLevel = await generateLevel(prompt);
       setLevel(newLevel);
-      resetGame(); // Reset game to apply new walls and positions safely
-      // Need to re-roll food because walls changed
-      setFood(getRandomPoint(INITIAL_SNAKE, newLevel.walls));
+      resetRound();
+      // Place food once, against the new level's walls
+      const placement = placeFoodForNewLevel(INITIAL_SNAKE, newLevel.walls);
+      if (placement.status === GameStatus.GAME_OVER) {
+        handleGameOver(0, 0);
+        ended = true;
+      } else {
+        setFood(placement.food);
+      }
     } catch (e: any) {
       setErrorMsg("Failed to generate level. Using current map.");
       console.error(e);
       // Go back to IDLE
       setStatus(GameStatus.IDLE);
     } finally {
-      setStatus(GameStatus.IDLE);
+      // A full board already set GAME_OVER; don't overwrite it
+      if (!ended) setStatus(GameStatus.IDLE);
       setLoadingMessage('');
     }
   };
