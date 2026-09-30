@@ -47,6 +47,16 @@ export function placeFoodForNewLevel(
   return placeFood(startSnake, walls, random);
 }
 
+// The high score once a game ends, counting the points earned on the tick
+// that ended it (e.g. the food that filled the board).
+export function highScoreAfterTick(
+  scoreBeforeTick: number,
+  pointsEarnedOnTick: number,
+  highScore: number,
+): number {
+  return Math.max(highScore, scoreBeforeTick + pointsEarnedOnTick);
+}
+
 // One game tick: move the head, check collisions, then grow or drop the tail.
 // On GAME_OVER the input snake is returned unchanged.
 export function advanceSnake(

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { advanceSnake, placeFood, placeFoodForNewLevel } from './gameLogic';
+import { advanceSnake, highScoreAfterTick, placeFood, placeFoodForNewLevel } from './gameLogic';
 import { Direction, GameStatus, Point } from './types';
 import { GRID_SIZE } from './constants';
 
@@ -186,6 +186,26 @@ describe('placeFoodForNewLevel', () => {
         status: GameStatus.GAME_OVER,
         food: null,
       });
+    });
+  });
+});
+
+describe('highScoreAfterTick', () => {
+  describe('REQ-004: the tick that ended the game counts', () => {
+    it('includes the points earned on the final tick', () => {
+      expect(highScoreAfterTick(90, 10, 95)).toBe(100);
+    });
+
+    it('keeps the old high score when the final score is lower', () => {
+      expect(highScoreAfterTick(80, 10, 95)).toBe(95);
+    });
+
+    it('keeps the old high score on a tie', () => {
+      expect(highScoreAfterTick(85, 10, 95)).toBe(95);
+    });
+
+    it('uses the score as is on a collision, which earns nothing', () => {
+      expect(highScoreAfterTick(120, 0, 95)).toBe(120);
     });
   });
 });

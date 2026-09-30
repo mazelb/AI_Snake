@@ -4,7 +4,7 @@ import Controls from './components/Controls.tsx';
 import { GameStatus, Direction, Point, LevelConfig } from './types';
 import { GRID_SIZE, INITIAL_SPEED, INITIAL_SNAKE, INITIAL_FOOD, SPEED_DECREMENT, MIN_SPEED, DEFAULT_LEVEL } from './constants';
 import { generateLevel } from './services/geminiService';
-import { advanceSnake, placeFood, placeFoodForNewLevel } from './gameLogic';
+import { advanceSnake, highScoreAfterTick, placeFood, placeFoodForNewLevel } from './gameLogic';
 
 // Custom hook for interval handling
 function useInterval(callback: () => void, delay: number | null) {
@@ -79,39 +79,47 @@ const App: React.FC = () => {
     const outcome = advanceSnake(snake, nextDirection, food, level.walls);
 
     if (outcome.status === GameStatus.GAME_OVER) {
-      handleGameOver();
+      handleGameOver(score, 0);
       return;
     }
 
     if (outcome.ate) {
       setScore(s => s + 10);
       setSpeed(s => Math.max(MIN_SPEED, s - SPEED_DECREMENT));
-      // Spawn new food; a full board ends the game, but still shows the final snake
-      spawnFood(outcome.snake, level.walls);
+      // Spawn new food; a full board ends the game, counting this food's points,
+      // but still shows the final snake
+      spawnFood(outcome.snake, level.walls, score, 10);
     }
 
     setSnake(outcome.snake);
 
-  }, [snake, nextDirection, status, food, level]);
+  }, [snake, nextDirection, status, food, level, score, highScore]);
 
   // Place food on a free cell, or end the game when the board is full.
-  // Returns false when the game ended.
-  const spawnFood = (currentSnake: Point[], currentWalls: Point[]): boolean => {
+  // Returns false when the game ended. The score arguments are the tick's,
+  // for the high score; after a reset both are 0.
+  const spawnFood = (
+    currentSnake: Point[],
+    currentWalls: Point[],
+    scoreBeforeTick = 0,
+    pointsEarnedOnTick = 0,
+  ): boolean => {
     const outcome = placeFood(currentSnake, currentWalls);
     if (outcome.status === GameStatus.GAME_OVER) {
-      handleGameOver();
+      handleGameOver(scoreBeforeTick, pointsEarnedOnTick);
       return false;
     }
     setFood(outcome.food);
     return true;
   };
 
-  const handleGameOver = () => {
+  const handleGameOver = (scoreBeforeTick: number, pointsEarnedOnTick: number) => {
     setStatus(GameStatus.GAME_OVER);
-    if (score > highScore) {
-      setHighScore(score);
+    const newHighScore = highScoreAfterTick(scoreBeforeTick, pointsEarnedOnTick, highScore);
+    if (newHighScore > highScore) {
+      setHighScore(newHighScore);
       // Optional: Save to local storage
-      localStorage.setItem('neon-snake-highscore', score.toString());
+      localStorage.setItem('neon-snake-highscore', newHighScore.toString());
     }
   };
 
@@ -170,7 +178,7 @@ const App: React.FC = () => {
       // Place food once, against the new level's walls
       const placement = placeFoodForNewLevel(INITIAL_SNAKE, newLevel.walls);
       if (placement.status === GameStatus.GAME_OVER) {
-        handleGameOver();
+        handleGameOver(0, 0);
         ended = true;
       } else {
         setFood(placement.food);
