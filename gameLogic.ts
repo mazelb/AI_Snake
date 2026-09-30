@@ -37,6 +37,16 @@ export function placeFood(
   return { status: GameStatus.PLAYING, food: free[Math.floor(random() * free.length)] };
 }
 
+// The single food placement for a freshly generated level: the start snake
+// against the new level's walls, never the previous level's.
+export function placeFoodForNewLevel(
+  startSnake: Point[],
+  walls: Point[],
+  random: () => number = Math.random,
+): FoodPlacement {
+  return placeFood(startSnake, walls, random);
+}
+
 // One game tick: move the head, check collisions, then grow or drop the tail.
 // On GAME_OVER the input snake is returned unchanged.
 export function advanceSnake(

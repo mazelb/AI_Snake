@@ -4,7 +4,7 @@ import Controls from './components/Controls.tsx';
 import { GameStatus, Direction, Point, LevelConfig } from './types';
 import { GRID_SIZE, INITIAL_SPEED, INITIAL_SNAKE, INITIAL_FOOD, SPEED_DECREMENT, MIN_SPEED, DEFAULT_LEVEL } from './constants';
 import { generateLevel } from './services/geminiService';
-import { advanceSnake, placeFood } from './gameLogic';
+import { advanceSnake, placeFood, placeFoodForNewLevel } from './gameLogic';
 
 // Custom hook for interval handling
 function useInterval(callback: () => void, delay: number | null) {
@@ -136,13 +136,19 @@ const App: React.FC = () => {
   const handlePause = () => setStatus(GameStatus.PAUSED);
   const handleResume = () => setStatus(GameStatus.PLAYING);
   
-  // Returns false when food could not be placed and the game ended.
-  const resetGame = (): boolean => {
+  // Snake, direction, score and speed back to their start values; food is
+  // placed by the caller, against whichever walls apply.
+  const resetRound = () => {
     setSnake(INITIAL_SNAKE);
     setDirection(Direction.UP);
     setNextDirection(Direction.UP);
     setScore(0);
     setSpeed(INITIAL_SPEED);
+  };
+
+  // Returns false when food could not be placed and the game ended.
+  const resetGame = (): boolean => {
+    resetRound();
     if (!spawnFood(INITIAL_SNAKE, level.walls)) return false;
     setStatus(GameStatus.IDLE);
     return true;
@@ -160,9 +166,15 @@ const App: React.FC = () => {
     try {
       const newLevel = await generateLevel(prompt);
       setLevel(newLevel);
-      resetGame(); // Reset game to apply new walls and positions safely
-      // Need to re-roll food because walls changed
-      ended = !spawnFood(INITIAL_SNAKE, newLevel.walls);
+      resetRound();
+      // Place food once, against the new level's walls
+      const placement = placeFoodForNewLevel(INITIAL_SNAKE, newLevel.walls);
+      if (placement.status === GameStatus.GAME_OVER) {
+        handleGameOver();
+        ended = true;
+      } else {
+        setFood(placement.food);
+      }
     } catch (e: any) {
       setErrorMsg("Failed to generate level. Using current map.");
       console.error(e);

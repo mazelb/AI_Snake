@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { advanceSnake, placeFood } from './gameLogic';
+import { advanceSnake, placeFood, placeFoodForNewLevel } from './gameLogic';
 import { Direction, GameStatus, Point } from './types';
 import { GRID_SIZE } from './constants';
 
@@ -135,5 +135,57 @@ describe('placeFood', () => {
   it('indexes free cells row by row from (0,0)', () => {
     expect(placeFood([], [], () => 0).food).toEqual({ x: 0, y: 0 });
     expect(placeFood([], [], () => 0.999999).food).toEqual({ x: 19, y: 19 });
+  });
+});
+
+describe('placeFoodForNewLevel', () => {
+  const startSnake = [{ x: 10, y: 10 }, { x: 10, y: 11 }, { x: 10, y: 12 }];
+
+  // Walls on every cell except the start snake and `free`.
+  const wallsAllBut = (free: Point[]): Point[] => {
+    const walls: Point[] = [];
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const p = { x, y };
+        const open = [...startSnake, ...free].some(f => f.x === x && f.y === y);
+        if (!open) walls.push(p);
+      }
+    }
+    return walls;
+  };
+
+  describe('REQ-005: food is placed once, against the new level walls', () => {
+    it('lands on a cell the new level leaves free, not one the old level did', () => {
+      // The old level walled off (3,4); the new level frees only that cell.
+      const newWalls = wallsAllBut([{ x: 3, y: 4 }]);
+      for (const random of [() => 0, () => 0.5, () => 0.999999]) {
+        expect(placeFoodForNewLevel(startSnake, newWalls, random)).toEqual({
+          status: GameStatus.PLAYING,
+          food: { x: 3, y: 4 },
+        });
+      }
+    });
+
+    it('never lands on a new wall or the start snake', () => {
+      const newWalls = wallsAllBut([{ x: 0, y: 0 }, { x: 19, y: 0 }, { x: 5, y: 17 }]);
+      for (const random of [() => 0, () => 0.3, () => 0.7, () => 0.999999]) {
+        const { food } = placeFoodForNewLevel(startSnake, newWalls, random);
+        expect(newWalls).not.toContainEqual(food);
+        expect(startSnake).not.toContainEqual(food);
+      }
+    });
+
+    it('draws from the random source exactly once', () => {
+      let calls = 0;
+      placeFoodForNewLevel(startSnake, [], () => { calls++; return 0.5; });
+      expect(calls).toBe(1);
+    });
+
+    it('ends the game when the new level leaves no free cell', () => {
+      expect(placeFoodForNewLevel(startSnake, wallsAllBut([]), () => 0)).toEqual({
+        status: GameStatus.GAME_OVER,
+        food: null,
+      });
+    });
   });
 });
