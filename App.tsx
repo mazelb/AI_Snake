@@ -4,7 +4,7 @@ import Controls from './components/Controls.tsx';
 import { GameStatus, Direction, Point, LevelConfig } from './types';
 import { GRID_SIZE, INITIAL_SPEED, INITIAL_SNAKE, INITIAL_FOOD, SPEED_DECREMENT, MIN_SPEED, DEFAULT_LEVEL } from './constants';
 import { generateLevel } from './services/geminiService';
-import { advanceSnake } from './gameLogic';
+import { advanceSnake, placeFood } from './gameLogic';
 
 // Custom hook for interval handling
 function useInterval(callback: () => void, delay: number | null) {
@@ -37,34 +37,6 @@ const App: React.FC = () => {
   const [level, setLevel] = useState<LevelConfig>(DEFAULT_LEVEL);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // Helper: Get random point not on snake or walls
-  const getRandomPoint = useCallback((currentSnake: Point[], currentWalls: Point[]): Point => {
-    let newPoint: Point;
-    let isValid = false;
-    
-    // Safety break for nearly full grids
-    let attempts = 0;
-    const maxAttempts = 1000;
-
-    do {
-      newPoint = {
-        x: Math.floor(Math.random() * GRID_SIZE),
-        y: Math.floor(Math.random() * GRID_SIZE),
-      };
-
-      const onSnake = currentSnake.some(s => s.x === newPoint.x && s.y === newPoint.y);
-      const onWall = currentWalls.some(w => w.x === newPoint.x && w.y === newPoint.y);
-      
-      if (!onSnake && !onWall) {
-        isValid = true;
-      }
-      attempts++;
-    } while (!isValid && attempts < maxAttempts);
-
-    if (!isValid) return { x: 0, y: 0 }; // Fallback
-    return newPoint;
-  }, []);
 
   // Keyboard controls
   useEffect(() => {
@@ -114,13 +86,25 @@ const App: React.FC = () => {
     if (outcome.ate) {
       setScore(s => s + 10);
       setSpeed(s => Math.max(MIN_SPEED, s - SPEED_DECREMENT));
-      // Spawn new food
-      setFood(getRandomPoint(outcome.snake, level.walls));
+      // Spawn new food; a full board ends the game, but still shows the final snake
+      spawnFood(outcome.snake, level.walls);
     }
 
     setSnake(outcome.snake);
 
-  }, [snake, nextDirection, status, food, level, getRandomPoint]);
+  }, [snake, nextDirection, status, food, level]);
+
+  // Place food on a free cell, or end the game when the board is full.
+  // Returns false when the game ended.
+  const spawnFood = (currentSnake: Point[], currentWalls: Point[]): boolean => {
+    const outcome = placeFood(currentSnake, currentWalls);
+    if (outcome.status === GameStatus.GAME_OVER) {
+      handleGameOver();
+      return false;
+    }
+    setFood(outcome.food);
+    return true;
+  };
 
   const handleGameOver = () => {
     setStatus(GameStatus.GAME_OVER);
@@ -144,7 +128,7 @@ const App: React.FC = () => {
   const handleStart = () => {
     // Reset snake for a fresh start if coming from Game Over or fresh load
     if (status === GameStatus.IDLE || status === GameStatus.GAME_OVER) {
-      resetGame();
+      if (!resetGame()) return;
     }
     setStatus(GameStatus.PLAYING);
   };
@@ -152,14 +136,16 @@ const App: React.FC = () => {
   const handlePause = () => setStatus(GameStatus.PAUSED);
   const handleResume = () => setStatus(GameStatus.PLAYING);
   
-  const resetGame = () => {
+  // Returns false when food could not be placed and the game ended.
+  const resetGame = (): boolean => {
     setSnake(INITIAL_SNAKE);
     setDirection(Direction.UP);
     setNextDirection(Direction.UP);
     setScore(0);
     setSpeed(INITIAL_SPEED);
-    setFood(getRandomPoint(INITIAL_SNAKE, level.walls));
+    if (!spawnFood(INITIAL_SNAKE, level.walls)) return false;
     setStatus(GameStatus.IDLE);
+    return true;
   };
 
   const handleReset = () => {
@@ -170,19 +156,21 @@ const App: React.FC = () => {
     setStatus(GameStatus.GENERATING_LEVEL);
     setLoadingMessage("Consulting Gemini AI...");
     setErrorMsg(null);
+    let ended = false;
     try {
       const newLevel = await generateLevel(prompt);
       setLevel(newLevel);
       resetGame(); // Reset game to apply new walls and positions safely
       // Need to re-roll food because walls changed
-      setFood(getRandomPoint(INITIAL_SNAKE, newLevel.walls));
+      ended = !spawnFood(INITIAL_SNAKE, newLevel.walls);
     } catch (e: any) {
       setErrorMsg("Failed to generate level. Using current map.");
       console.error(e);
       // Go back to IDLE
       setStatus(GameStatus.IDLE);
     } finally {
-      setStatus(GameStatus.IDLE);
+      // A full board already set GAME_OVER; don't overwrite it
+      if (!ended) setStatus(GameStatus.IDLE);
       setLoadingMessage('');
     }
   };
