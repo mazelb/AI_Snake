@@ -23,7 +23,9 @@
 #   While an issue is being implemented or verified (a .dev-flow-run/implementing-*
 #   or verifying-* marker exists; /implement and /verify create them)
 #     - A Write or Edit of flow.json (or .flow.json), a lint, format or
-#       git-hook config (the list below), or an acceptance.md.
+#       git-hook config (the list below), an acceptance.md, or a test /harness
+#       generated: a file matching flow.json's `acceptance_tests` glob, when it
+#       is set (build item 30, DECISIONS.md B15).
 #     - A command that writes one of those: a redirection into it, or sed -i,
 #       perl -i, tee, mv, cp, rm, truncate, dd, ln, install, touch, unlink,
 #       shred, rsync, or git checkout / restore / rm / mv naming it; through
@@ -73,17 +75,85 @@ find_root() {
   ROOT=${CLAUDE_PROJECT_DIR:-$PWD}
 }
 
+# True when a marker puts the phase on; the markers, as .dev-flow-run/<name>, in
+# MARKERS, so a block can name them: the model may not list .dev-flow-run/ (this
+# hook blocks that), and M1's model could not tell which marker was to blame.
 phase_active() {
   local f
+  MARKERS=''
   for f in "$ROOT"/.dev-flow-run/implementing-* "$ROOT"/.dev-flow-run/verifying-*; do
-    [ -e "$f" ] && return 0
+    [ -e "$f" ] && MARKERS+=" .dev-flow-run/${f##*/}"
   done
-  return 1
+  [ -n "$MARKERS" ]
 }
 
 block() {
   printf '%s\n' "$@" >&2
   exit 2
+}
+
+# --- the generated acceptance tests (build item 30, DECISIONS.md B15) -------------
+# flow.json's `acceptance_tests` glob, from the first of flow.json, .flow.json and
+# .claude/flow.json at ROOT (the order pipeline_config.py reads them in), in
+# TESTS_GLOB, made into regular expressions over a path as the JSON text holds it
+# once each \\ is read as /. TESTS_RE finds a concrete name matching the glob: a
+# word holding * or ? is not one, so a test command's `--exclude
+# '**/*.acceptance.test.*'` names nothing. TESTS_WILD lets the name hold * and ?,
+# for a pattern that picks the files to read. TESTS_DIR is the glob's literal
+# leading directory, if any; TESTS_ALL is 1 when every file under it matches.
+# A * or ? matches within one path component, ** any number of them, and a glob
+# with no / may match at any depth. All empty when the key is unset or empty.
+# This function is the same in acceptance-guard.sh and integrity-guard.sh
+# (tests/test_guards.py compares them).
+tests_glob() {
+  local f raw re g rest comp c i n s w lit=1 all=1
+  local pc='[^/\\[:space:]"'"'"'`;&|<>()$=:,'
+  local p="${pc}*?]" pw="${pc}]"
+  local b='[/\\[:space:]"'"'"'`;&|<>()$=:,]' e='[\\[:space:]"'"'"'`;&|<>()$=:,]'
+  TESTS_GLOB='' TESTS_RE='' TESTS_WILD='' TESTS_DIR='' TESTS_ALL=''
+  for f in flow.json .flow.json .claude/flow.json; do
+    [ -f "$ROOT/$f" ] || continue
+    raw=''
+    IFS= read -r -d '' raw 2>/dev/null < "$ROOT/$f"
+    re='"acceptance_tests"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+    [[ $raw =~ $re ]] && TESTS_GLOB=${BASH_REMATCH[1]}
+    break
+  done
+  g=${TESTS_GLOB//\\\\//}; g=${g//\\\//}
+  while [[ $g == ./* ]]; do g=${g#./}; done
+  [ -n "$g" ] || return 0
+  s='' w='' rest=$g
+  while :; do
+    comp=${rest%%/*}
+    if [[ $rest == */* ]]; then rest=${rest#*/}; n=1; else rest=''; n=0; fi
+    if [ -z "$comp" ]; then
+      :
+    elif [ "$comp" = '**' ]; then
+      lit=0
+      if [ "$n" = 1 ]; then s+="(${p}+/)*"; w+="(${pw}+/)*"
+      else s+="${p}+(/${p}+)*"; w+="${pw}+(/${pw}+)*"; fi
+    else
+      [[ $comp == *[*?]* ]] && lit=0
+      [ "$lit" = 1 ] && [ "$n" = 1 ] && TESTS_DIR+="${TESTS_DIR:+/}$comp"
+      [ "$lit" = 0 ] && [[ $comp == *[!*?]* ]] && all=0
+      for ((i = 0; i < ${#comp}; i++)); do
+        c=${comp:i:1}
+        case $c in
+          '*') s+="${p}*"; w+="${pw}*" ;;
+          '?') s+=$p; w+=$pw ;;
+          [[:alnum:]_@%~#-]) s+=$c; w+=$c ;;
+          '^') s+='\^'; w+='\^' ;;
+          *) s+="[$c]"; w+="[$c]" ;;
+        esac
+      done
+      [ "$n" = 1 ] && { s+=/; w+=/; }
+    fi
+    [ "$n" = 1 ] || break
+  done
+  TESTS_RE="(^|${b})${s}(${e}|\$)"
+  TESTS_WILD="(^|${b})${w}(${e}|\$)"
+  [ -n "$TESTS_DIR" ] && [ "$lit" = 0 ] && [ "$all" = 1 ] && TESTS_ALL=1
+  return 0
 }
 
 # Protected while implementing: a path whose last component is one of these, or
@@ -223,29 +293,42 @@ if { [ "$TOOL" = Write ] || [ "$TOOL" = Edit ]; } && [[ $FILE =~ $spec_doc ]]; t
   fi
 fi
 
-# --- while implementing: the checks and the cases are not edited ---------------------
+# --- while implementing: the checks, the cases and their tests are not edited --------
 case "$TOOL" in
-  Write|Edit|NotebookEdit) [[ $FILE =~ $PROTECTED ]] || exit 0 ;;
-  Bash|PowerShell|Monitor) [[ $CMD =~ $PROTECTED || $CMD == *dev-flow-run* ]] || exit 0 ;;
-  *)                       exit 0 ;;
+  Write|Edit|NotebookEdit|Bash|PowerShell|Monitor) ;;
+  *) exit 0 ;;
 esac
 
 find_root
 phase_active || exit 0
 
+# The acceptance tests /harness generated, when flow.json names them (build item
+# 30, DECISIONS.md B15), are protected with the rest. A pattern counts here (a
+# `rm src/*.acceptance.test.ts`): only a command that writes is blocked, so the
+# test command's `--exclude '**/*.acceptance.test.*'` still runs.
+tests_glob
+[ -n "$TESTS_WILD" ] && PROTECTED+="|${TESTS_WILD}"
+FILE=${FILE//"$bs"//}
+case "$TOOL" in
+  Write|Edit|NotebookEdit) [[ $FILE =~ $PROTECTED ]] || exit 0 ;;
+  *)                       [[ $CMD =~ $PROTECTED || $CMD == *dev-flow-run* ]] || exit 0 ;;
+esac
+
 MSG_WHY=(
   ""
   "While an issue is being implemented or verified, flow.json, the lint, format and"
-  "git-hook configuration, and the acceptance cases are fixed. Weakening a check to get"
-  "a green run hides the failure instead of fixing it. If a check or a case is wrong,"
-  "stop and say so; the person who owns it decides."
+  "git-hook configuration, the acceptance cases and the tests generated from them are"
+  "fixed. Weakening a check to get a green run hides the failure instead of fixing it."
+  "If a check, a case or a generated test is wrong, stop and say so; the person who"
+  "owns it decides."
   ""
+  "The phase is on because of:${MARKERS}"
   "(For the person: /verify <issue> ends the phase. If no issue is being worked on,"
-  "a marker was left behind: delete .dev-flow-run/implementing-* and verifying-* yourself.)"
+  "a marker was left behind: delete it yourself.)"
 )
 
 if [ -n "$FILE" ]; then
-  block "Blocked: ${FILE//"$bs"//} is protected while an issue is being implemented or verified." "${MSG_WHY[@]}"
+  block "Blocked: $FILE is protected while an issue is being implemented or verified." "${MSG_WHY[@]}"
 fi
 
 # A command line: look at each simple command on its own.

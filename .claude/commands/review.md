@@ -30,11 +30,14 @@ the tree this branch commits. `STALE` means they ran on a different tree (an edi
 since, uncommitted changes, or a changed command) and prove nothing about this
 one; `MISSING` means they never ran through the ledger. Neither is clean, and you
 do not re-run them yourself to make them green: tell me to run
-`/verify $ARGUMENTS` on the committed tree. If a step says it is not configured, say so
-plainly rather than treating it as a pass — an unconfigured step is a gap in the
-setup, not a green light. When the coverage above says the plan skips
-acceptance, no `acceptance` evidence is expected: say it is skipped by the plan,
-with the plan's reason, and hold `test` to the same rule (if it is not `FRESH`,
+`/verify $ARGUMENTS` on the committed tree. If lint says it is not configured,
+report `lint: not configured`, here and in the PR body. That is not a pass, and
+it does not hold the PR back either: `flow.json` has no lint command, and an
+unconfigured step skips loudly. A configured lint must pass. `test` and
+`acceptance` have no such exemption: one that is not configured never ran
+through the ledger, so it is MISSING and not clean. When the coverage above says
+the plan skips acceptance, no `acceptance` evidence is expected: say it is
+skipped by the plan, with the plan's reason, and hold `test` to the same rule (if it is not `FRESH`,
 the command that records it is
 `python3 .claude/skills/dev-flow/scripts/evidence.py run test`).
 
@@ -66,9 +69,11 @@ Then act on the autonomy tier above. There are two tiers, and only `autonomous`
 merges:
 
 - `manual` — report, then open the PR for this branch, or update it if one exists:
-  push the branch, then `gh pr create --draft`, or `gh pr edit`. The body cites
-  issue #$ARGUMENTS and summarises the three layers. If all three layers are clean,
-  mark it ready for review (`gh pr ready`). Do not merge it. I merge.
+  push the branch, then `gh pr create --draft`, or `gh pr edit`. The body's first
+  line is `Closes #$ARGUMENTS`, so merging the PR closes the issue, and the rest
+  summarises the three layers, naming any step that is not configured.
+  If all three layers are clean, mark it ready for review (`gh pr ready`).
+  Do not merge it. I merge.
 - `autonomous` — the same, and then, if all three layers are clean, merge it
   (`gh pr merge --merge`, which keeps each commit and the ids it cites).
 - Anything else, or an error, is not a tier (`assisted` was removed). Report, open
@@ -77,6 +82,7 @@ merges:
 
 If the branch above is the repository's default branch, there is no PR to open:
 report and stop. If anything is not clean, leave the PR a draft, stop and report.
+An unconfigured lint, reported as above, is not a reason to.
 Never mark it ready or merge it past a failing check because the failure looks
 unrelated; say it looks unrelated and let me decide.
 

@@ -185,12 +185,14 @@ def check_success_metric(prd: Prd, out: list[Finding]) -> None:
             out.append(Finding(ERROR, "metric.field", line_no,
                                f"Success metric block is missing '{field}'."))
 
-    for raw in body.splitlines():
+    # The section's body starts on the line after its heading; a finding about one
+    # line points at that line, not at the heading.
+    for offset, raw in enumerate(body.splitlines(), start=1):
         stripped = raw.strip().lstrip("- ").strip()
         if stripped.startswith("Target:"):
             value = stripped[len("Target:"):]
             if not NEEDS_INPUT_RE.search(value) and not re.search(r"\d", value):
-                out.append(Finding(ERROR, "metric.target", line_no,
+                out.append(Finding(ERROR, "metric.target", line_no + offset,
                                    "Target contains no number. A target without a number "
                                    "cannot be evaluated after the fact."))
         if stripped.startswith("Source:"):

@@ -57,8 +57,10 @@ overrides a merged setting on this machine.
 It also appends `playwright-report/` and `test-results/` to the project's
 `.gitignore` (created if absent) when they are not already there, for projects
 that use Playwright Test as their acceptance command (`GETTING-STARTED.md` step
-3b), and `.dev-flow-run/`, where `/acceptance`, `/harness`, `/implement` and
-`/verify` keep the markers the guard hooks read. Existing lines are never changed, and a re-run adds nothing.
+3b), `.dev-flow-run/`, where `/acceptance`, `/harness`, `/implement` and
+`/verify` keep the markers the guard hooks read, and `__pycache__/`, where Python
+puts the validators' bytecode, which would otherwise make every evidence record
+STALE. Existing lines are never changed, and a re-run adds nothing.
 
 ## The two halves
 
@@ -73,7 +75,9 @@ issue is too thin to spec without inventing the gaps.
 
 Commands are named, not assumed: `install`, `lint`, `typecheck`, `test`,
 `acceptance`, `build`. An unconfigured command is not an error — that step skips
-loudly.
+loudly. `/review` reports an unconfigured `lint` as "not configured" and readies
+the PR all the same; `test` and `acceptance` have no such pass, since `/review`
+needs their evidence from `/verify` (build decision B16).
 
 `autonomy` is per project, and there are two tiers:
 
@@ -88,6 +92,15 @@ removed (build C2 in the harness repo's `DECISIONS.md`). Neither tier deploys;
 that is `optional-delivery/`.
 
 `python3 scripts/pipeline_config.py --gates` lists what holds at every tier.
+
+`acceptance_tests` is a glob from the project root naming where `/harness` writes
+the tests it generates from the acceptance cases (`**/*.acceptance.test.*`,
+`tests/acceptance/**`). The guards lock the files it matches as they lock
+`acceptance.md` (below; build decision B15), and the `test` command should leave
+them out; `GETTING-STARTED.md` step 3b shows how for vitest, jest, pytest and
+Playwright Test. `flow.example.json` ships it empty, and empty or unset nothing is
+hidden: bootstrap and `pipeline_config.py` say so. `pipeline_config.py --check`
+rejects a glob the guards could not read.
 
 ## The ID contract
 
@@ -129,7 +142,8 @@ cannot check; `evidence.py run` exits with the command's own code. `deliver.yml`
 ## Enforced boundaries
 
 **The plan is the human gate.** `/implement` refuses unless `status: approved`, and
-only a hand edit sets that.
+only a hand edit sets that. It sets its implementing marker only for an approved
+plan, so a refusal leaves nothing that locks the issue.
 
 **Acceptance cases are hidden from the coding agent.** `acceptance-guard.sh` blocks
 access to `specs/<n>-<slug>/acceptance.md` by Read, Grep, Glob, and a command run by
@@ -150,6 +164,19 @@ removes both. A tool call that tries to create a `verifying-` or `authoring-` ma
 is blocked. Its gaps are under Known limits. Code written against visible
 tests passes those tests without necessarily satisfying the requirement behind them.
 
+**So are the tests generated from them** (build item 30), once `flow.json` sets
+`acceptance_tests`. `/harness` writes its tests only where that glob points, and
+the acceptance guard treats a file it matches as it treats `acceptance.md`, through
+the same tools: a call naming one is blocked while any issue is being implemented,
+and otherwise unless an `authoring-` or `verifying-` marker exists (the tests belong
+to no one issue's directory, so any such marker unlocks them); so is a Grep over the
+glob's own directory or one holding it, and a Write, Edit or NotebookEdit of one
+while an issue is being implemented or verified. A word holding `*` or `?` names no
+file in a command or a Skill call's arguments, so the `test` command's `--exclude
+'**/*.acceptance.test.*'` runs; in a Grep's glob or a Glob's pattern it counts. The
+`test` command leaving them out is what keeps the implementer's own test runs from
+running them; `/verify` runs `test` and `acceptance` separately.
+
 **The checks are not weakened to get a green run.** `integrity-guard.sh` blocks
 `--no-verify`, `git commit -n` and any `core.hooksPath` change at all times, and a
 Write or Edit of a `prd.md` or `plan.md` that drops a `REQ-` or `TASK-` id the file
@@ -157,7 +184,9 @@ has (ids are permanent; mark one `[WITHDRAWN]` in place). While an issue is bein
 implemented or verified it also blocks edits to `flow.json`, the lint, format and
 git-hook configuration files it lists, and `acceptance.md`, by the Write, Edit and
 NotebookEdit tools and by the commands that plainly write a file, run by Bash,
-PowerShell (`Set-Content`, `Out-File`, `>` and the rest) or Monitor. Outside that phase they
+PowerShell (`Set-Content`, `Out-File`, `>` and the rest) or Monitor, and the same
+for the generated acceptance tests when `acceptance_tests` is set (there a pattern
+counts: `rm src/*.acceptance.test.ts` is blocked). Outside that phase they
 are yours to edit, and `/spec-setup` fills in `flow.json`.
 
 **Tests are generated in a forked context.** `/harness` sees the cases and the
@@ -193,7 +222,11 @@ and anything installed later. What the switch does not cover is under Known limi
 `Read(**/.env)`, `Read(**/.env.*)`, `Read(**/*.pem)`, `Read(**/*.key)`,
 `Read(~/.ssh/**)`, `Read(~/.aws/**)`, `Read(~/.config/gh/**)`,
 `Read(~/.git-credentials)`, `Read(~/.netrc)`, `Read(~/.docker/config.json)`,
-`Read(~/.npmrc)` and `Edit(.github/workflows/**)`. It also sets
+`Read(~/.npmrc)` and `Edit(.github/workflows/**)`. **So are the session
+transcripts** (`Read(~/.claude/projects/**)`, build item 31, DECISIONS.md B18):
+Claude Code writes every session there, and the first real run found the cases in the
+transcripts of `/acceptance`, `/harness` and `/verify`, where a later `/implement`
+could have read them. It also sets
 `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, so a sub-agent cannot start its own. A
 deny rule anywhere beats an allow rule anywhere, including `--allowedTools` and a
 command's `allowed-tools`. What the rules do not stop is under Known limits.
@@ -256,7 +289,7 @@ dev-flow/
 │   └── coverage.md               /coverage — requirement coverage matrix
 ├── hooks/                        → .claude/hooks/
 │   ├── spec-validate.sh          PostToolUse: validates whichever artifact was written
-│   ├── acceptance-guard.sh       PreToolUse: blocks reading acceptance.md while coding
+│   ├── acceptance-guard.sh       PreToolUse: blocks reading acceptance.md, and the tests generated from it, while coding
 │   └── integrity-guard.sh        PreToolUse: blocks --no-verify, dropped ids, and config edits while coding
 ├── scripts/                      → .claude/skills/dev-flow/scripts/
 │   ├── bootstrap.sh              install into a repo, idempotent; --dry-run writes nothing
@@ -267,7 +300,7 @@ dev-flow/
 │   ├── validate_plan.py          task structure, REQ or issue references, seams, skipped steps
 │   ├── validate_acceptance.py    case structure, freeze check, implementation leaks
 │   ├── coverage.py               REQ → tasks → cases matrix
-│   ├── spec-check-all.sh         batch validate
+│   ├── spec-check-all.sh         batch validate: every artifact, one file, or one issue
 │   ├── ac_trace.py               links test results (JUnit XML, or runner output) back to AC- ids
 │   ├── evidence.py               evidence ledger: runs a flow.json check, records exit code and tree; FRESH/STALE/MISSING
 │   ├── pipeline_config.py        reads and checks flow.json
@@ -301,7 +334,7 @@ dev-flow/
 │   ├── check_bash_rule_syntax.py static check: every Bash rule in the documented space form
 │   ├── probe_bash_rules_live.py  what the rules match, and that the commands still load, live
 │   ├── test_settings_merge.py    fixture runner for settings_merge.py and bootstrap's --dry-run
-│   ├── probe_settings_live.py    a `-p` read of .env is denied in a bootstrapped project, live
+│   ├── probe_settings_live.py    a `-p` read of .env, and of a session transcript, is denied in a bootstrapped project, live
 │   ├── test_settings_preflight.py  fixture runner for settings_preflight.py and the workflow steps that run it
 │   ├── judge_preflight_run.py    judges a live spec-pipeline.yml run: failed at preflight, Claude never started
 │   ├── test_bootstrap_gitignore.py  the Playwright Test docs example, and bootstrap's .gitignore append
@@ -312,8 +345,13 @@ dev-flow/
 │   ├── test_evidence.py          fixture runner for evidence.py, and the /verify and /review lines that use it
 │   ├── judge_evidence_review.py  judges a live `-p` /review run: FRESH evidence readies the PR, STALE leaves a draft
 │   ├── test_ac_trace.py          fixture runner for ac_trace.py: runner outputs and JUnit reports
+│   ├── test_m1_fixes.py          M1's fixes (item 29): validators, spec-validate.sh on Windows paths, the
+│   │                             issue template, and the /implement, /coverage, /spec-check and /review lines
+│   ├── probe_m1_fixes_live.py    those command fixes in real `-p` sessions, default mode
+│   ├── probe_hidden_tests_live.py  /implement cannot read a generated acceptance test, live (item 30)
 │   └── fixtures/
 │       ├── ac_trace/             acceptance files, runner outputs and JUnit reports for ac_trace.py
+│       ├── m1/                   PRD, plan and acceptance fixtures for test_m1_fixes.py
 │       ├── issues/               ten issue fixtures (.json and .txt)
 │       ├── code-review-stub/     SKILL.md standing in for Pocock's code-review
 │       ├── plans/                spec directories with plan fixtures
@@ -337,10 +375,10 @@ these tests check this repository's own assets — the issue envelope, the spec 
 grants and its trust check, the autonomy tiers and `/review`, `/spec-setup`'s Pocock
 install, the plan validator and coverage, the Bash rule syntax, the settings
 merge, the CI settings preflight, the `.gitignore` append, the two guard hooks, the
-evidence ledger and the acceptance trace — not anything in a project.
+evidence ledger, the acceptance trace and M1's fixes — not anything in a project.
 `check_pocock_live.py` installs, and `probe_bash_rules_live.py`,
 `probe_settings_live.py`, `probe_guards_live.py`, `probe_stage_markers_live.py`,
-`probe_guard_tools_live.py` and `test_settings_preflight.py --live`
+`probe_guard_tools_live.py`, `probe_m1_fixes_live.py`, `probe_hidden_tests_live.py` and `test_settings_preflight.py --live`
 run `claude -p`, so
 point them only at scratch directories. Their absence from the
 installer is not a bug. Run them from the harness repo root, for example
@@ -362,8 +400,9 @@ installer is not a bug. Run them from the harness repo root, for example
   model claiming a result it did not produce; it does not stop a session that sets
   out to forge a record. Files git ignores (`node_modules/`, `.env`, build output)
   are not in the fingerprint, so changing one leaves evidence FRESH. A generated
-  file that is not ignored (a `__pycache__/` with no `.gitignore` entry) changes
-  the tree during the run, and every record is STALE until it is ignored. Any
+  file that is not ignored changes the tree during the run, and every record is
+  STALE until it is ignored; bootstrap ignores `__pycache__/`, which the
+  validators create, and any other generated output is the project's to ignore. Any
   `flow.json` edit stales every record, since the file is part of the tree.
   Computing the fingerprint writes the tree's blobs into `.git/objects`, as
   `git stash create` does.
@@ -402,7 +441,10 @@ checks they run on the cases. What remains:
   Both hooks run with `"timeout": 30`, about 50 times the worst. On the Mac (build
   item 11) the worst runs were 0.014 s and 0.36 s. Build item 27 re-measured Windows
   with the PowerShell calls added (2026-09-28): 0.35 s and 0.58 s, the timeout 85 and
-  52 times those. The fail-open itself stays: a machine stalled for 30 seconds lets
+  52 times those. Since build item 30 every call also reads `flow.json` for
+  `acceptance_tests`; re-measured on Windows with the key set (2026-09-30), the worst
+  runs were 0.12 s and 0.44 s, 245 and 69 times inside the timeout. The fail-open
+  itself stays: a machine stalled for 30 seconds lets
   the call through. `spec-validate.sh` has the same shape at `"timeout": 20`.
   Unattended stages do not rely on the guards (DR1 tier 2).
 - **They see what a call names, not what it touches.** The acceptance guard blocks a
@@ -416,7 +458,14 @@ checks they run on the cases. What remains:
   the two to one verdict on the same commands (B14). A word dressed as an exclusion and
   unwrapped by another program is not seen. It does not see a shell glob that avoids the name
   (`cat specs/42-x/a*`), `grep -r` from the repository root, a Grep with no path, or a
-  script that opens the file. The integrity guard recognises the plain ways a shell
+  script that opens the file. For the generated acceptance tests (build item 30) it
+  likewise misses a shell glob (`cat src/*.acceptance.test.ts`), a Grep with no path
+  or over any directory but the glob's literal one and those holding it (so every
+  Grep, for a glob that starts with a wildcard: `Grep "AC-" --glob "*.ts"` from the
+  root searches them), and a command that runs them without naming one, which the
+  `test` command leaving them out is meant to cover (B15). The tests are locked
+  with no marker at all, as `acceptance.md` is, so a `/review` sub-agent that
+  Reads one is denied. The integrity guard recognises the plain ways a shell
   command writes a file (a redirection, `sed -i`, `tee`, `cp`, `mv`, `rm`, `git
   checkout`, and the like); `python -c` or a variable holding the file name get past
   it. Its list of lint and format configuration files is fixed and cross-ecosystem;
@@ -462,8 +511,9 @@ checks they run on the cases. What remains:
   `verifying-` or `authoring-` marker exists.
 - **A marker left behind keeps its phase on.** If `/verify` never finishes, its
   `verifying-<n>` marker leaves issue n readable, and `implementing-` or `verifying-`
-  markers keep `flow.json` and the configs protected. The block message says so; delete
-  the stale file in `.dev-flow-run/` yourself. Likewise an `/acceptance` or `/harness`
+  markers keep `flow.json` and the configs protected. The block message names the
+  marker that put the phase on (build item 29); delete that file in `.dev-flow-run/`
+  yourself. Likewise an `/acceptance` or `/harness`
   run that stops before its last step leaves `authoring-<n>`, and issue n readable,
   until `/implement <n>` or `/verify <n>` removes it.
 - **Markers belong to one working tree.** The hooks look for `.dev-flow-run/` at the
@@ -483,12 +533,14 @@ checks they run on the cases. What remains:
   so they block `/acceptance`'s validator and `/harness`'s trace. A project wired before
   build item 27 keeps matchers without `PowerShell`, `Monitor`, `NotebookEdit` and
   `Skill` until `--update-hooks`, and guard scripts that do not read them. One wired
+  before build item 30 keeps guards that do not read `acceptance_tests`, and a
+  `/harness` that does not write to it. One wired
   before build item 28 keeps the guard that blocks exclusion pathspecs and a Skill
   call's prose, and a `/spec-setup` that repairs with the installed `bootstrap.sh`,
   which stops halfway. To upgrade, delete
   `.claude/hooks/acceptance-guard.sh`, `.claude/hooks/integrity-guard.sh` and
   `.claude/commands/` `verify.md`, `implement.md`, `acceptance.md`, `harness.md` and
-  `spec-setup.md` (after saving any edits of your own), then run
+  `spec-setup.md`, and `.claude/skills/dev-flow/scripts/pipeline_config.py` (after saving any edits of your own), then run
   `bootstrap.sh --update-hooks`: it copies the new ones.
 
 The fifth weakness research found was auto memory. Build item 6 answered it as far
@@ -542,3 +594,33 @@ below is from the documentation (`research/q2-claude-code-capabilities.md` §10.
   Claude in an interactive session; edit it yourself.
 - **Relative rules anchor to the working directory.** `**/.env` covers every `.env`
   under the directory Claude was started in, not above it.
+- **The session transcripts: a route the first real run found, closed by a rule.**
+  Claude Code keeps every session as `~/.claude/projects/<project>/<session>.jsonl`,
+  with its sub-agents' transcripts beside it, outside the project. The acceptance
+  guard looks for `acceptance.md`, so it never saw them, and no rule covered them
+  before build item 31. After the first real run (build item 10) eight of them held
+  case titles and Given/When/Then text: the `/acceptance`, `/harness` and `/verify`
+  sessions and their sub-agents. Nothing loads a transcript into a later session, but
+  an `/implement` that read one would have had the cases. Without the rule, a
+  default-mode Read there waits for an approval a headless run never gets, but an
+  allow (`--allowedTools`) lets it through, and in auto mode with this Windows box's
+  user settings a Read of a transcript succeeded with no allow at all.
+  `Read(~/.claude/projects/**)` (DECISIONS.md B18) closes it. Build item 31 measured
+  it on Windows with Claude Code 2.1.285 (`tests/probe_settings_live.py`): a Read of
+  a real transcript, and a `cat` of it by `~/` and by absolute path with `Bash(cat *)`
+  allowed, were all denied by the rule, with project settings only in `default` mode
+  and with every settings source; so was a Read that `--allowedTools` allowed. Claude
+  Code still started and wrote each session's transcript with the rule in place. The
+  Mac was not measured. What it does not cover:
+  - A script that opens a transcript, and a command the permission checker does not
+    read paths from, as for the other rules. A `Get-Content` by the Windows
+    `PowerShell` tool was not tried.
+  - Transcripts somewhere else. The rule names `~/.claude` only, so a machine that
+    sets `CLAUDE_CONFIG_DIR` to move Claude Code's directory is not covered (the
+    probe refuses to run there).
+  - **Its cost:** the same directory holds the file Claude Code saves a tool output
+    to when it is too large to show (`<session>/tool-results/`). The session sees a
+    2 KB preview and is told where the rest is, but cannot read it: in build item 31 a
+    Read of the saved output of a 210 KB `cat` was denied by the rule. Filter such a
+    command's output instead (`… | tail -n 50`). The memory directory
+    is under it too, which is moot while auto memory is off.

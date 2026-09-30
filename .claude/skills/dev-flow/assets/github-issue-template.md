@@ -1,15 +1,20 @@
+---
+name: Spec request
+about: Work agreed in ideation that should be specced before implementation
+---
 <!--
 Save as .github/ISSUE_TEMPLATE/spec-request.md
 
 This template is part of the PRD pipeline, not upstream of it. The skill reads
 these fields as its minimum payload and refuses to generate a PRD when two or
 more are missing — a thin issue produces a fluent, confident, fabricated PRD.
+
+The front matter must be the file's first line: GitHub does not list a template
+whose front matter comes after anything else, this comment included. The
+template applies no label. `spec:auto` starts spec-pipeline.yml, which fails in
+a repository without the CLAUDE_CODE_OAUTH_TOKEN secret, so label the issue
+by hand when that job should run.
 -->
----
-name: Spec request
-about: Work agreed in ideation that should be specced before implementation
-labels: ["spec:auto"]
----
 
 ## What problem are we solving
 

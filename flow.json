@@ -5,9 +5,10 @@
     "install": "npm ci",
     "lint": "",
     "typecheck": "npx tsc --noEmit",
-    "test": "npx vitest run --passWithNoTests",
+    "test": "npx vitest run --passWithNoTests --exclude '**/*.acceptance.test.*'",
     "acceptance": "npx vitest run -t AC- --reporter=default --reporter=junit --outputFile.junit=test-results/acceptance-junit.xml",
     "build": "npm run build"
   },
-  "acceptance_junit": "test-results/acceptance-junit.xml"
+  "acceptance_junit": "test-results/acceptance-junit.xml",
+  "acceptance_tests": "**/*.acceptance.test.*"
 }

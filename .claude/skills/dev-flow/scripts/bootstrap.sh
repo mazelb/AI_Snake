@@ -8,8 +8,8 @@
 # Two files are changed in place. .claude/settings.json: scripts/settings_merge.py
 # merges the shipped settings into it entry by entry, after a backup, and refuses
 # a file it cannot parse (that script's header has the rules). .gitignore: the
-# Playwright Test output directories and dev-flow's run state (.dev-flow-run/) are
-# appended when absent, never rewritten.
+# Playwright Test output directories, dev-flow's run state (.dev-flow-run/) and
+# Python's bytecode (__pycache__/) are appended when absent, never rewritten.
 #
 # --dry-run prints every write and merge it would make, and writes nothing.
 # --update-hooks gives the project's existing entries for dev-flow's hook scripts
@@ -156,6 +156,25 @@ PYEOF
   say "ACTION        fill in the commands in flow.json — the agents read them"
 fi
 
+# Whether the tests /harness generates are hidden from /implement: flow.json's
+# acceptance_tests glob (build item 30, DECISIONS.md B15). Reported, never set:
+# where the tests go is the project's choice (GETTING-STARTED.md, step 3b).
+if [ -e flow.json ]; then
+  tests_rc=0
+  tests_glob="$(python3 "$SRC/scripts/pipeline_config.py" --get acceptance_tests 2>&1)" || tests_rc=$?
+  if [ "$tests_rc" = 0 ]; then
+    say "hidden        the generated acceptance tests: $tests_glob (flow.json acceptance_tests)"
+  elif [ "$tests_rc" = 4 ]; then
+    say "NOTE          flow.json sets no acceptance_tests, so nothing hides the tests /harness"
+    say "              generates from /implement. Set it (GETTING-STARTED.md, step 3b)"
+  else
+    say "WARNING       flow.json: $tests_glob"
+  fi
+else
+  say "NOTE          the flow.json it would write sets no acceptance_tests, so nothing would hide"
+  say "              the tests /harness generates from /implement (GETTING-STARTED.md, step 3b)"
+fi
+
 if [ "$DRY_RUN" = 1 ]; then
   say "would write   .claude/skills/dev-flow/DEFAULT_DOMAIN ($DOMAIN)"
 else
@@ -163,17 +182,25 @@ else
 fi
 
 # 8. .gitignore: Playwright Test's output directories, for projects that use it
-# as their acceptance command (GETTING-STARTED.md, step 3b), and .dev-flow-run/,
+# as their acceptance command (GETTING-STARTED.md, step 3b), .dev-flow-run/,
 # where /implement and /verify keep the markers the guard hooks read and the spec
-# job keeps the issue it fetched. Appended only when absent; an entry counts as
-# present in any of the spellings that ignore the directory at the root (name,
-# name/, /name, /name/). Existing lines are never changed, and the file's own
-# line endings are kept.
-GITIGNORE_ENTRIES=(playwright-report/ test-results/ .dev-flow-run/)
+# job keeps the issue it fetched, and __pycache__/, the bytecode Python writes
+# beside the validators (.claude/skills/dev-flow/scripts/__pycache__/). Not
+# ignored, it changes the tree evidence.py fingerprints, and every record is
+# STALE (M1). Appended only when absent; an entry counts as present in any of the
+# spellings that ignore the directory at the root (name, name/, /name, /name/),
+# and __pycache__/ only in those that ignore it at any depth (name, name/,
+# **/name, **/name/). Existing lines are never changed, and the file's own line
+# endings are kept.
+GITIGNORE_ENTRIES=(playwright-report/ test-results/ .dev-flow-run/ __pycache__/)
 missing=()
 for e in "${GITIGNORE_ENTRIES[@]}"; do
   n="${e%/}"; n="${n//./[.]}"  # a literal dot in the pattern below
-  if [ -f .gitignore ] && grep -qxE "[[:space:]]*/?${n}/?[[:space:]]*" .gitignore; then continue; fi
+  case "$e" in
+    __pycache__/) lead='(\*\*/)?' ;;
+    *)            lead='/?' ;;
+  esac
+  if [ -f .gitignore ] && grep -qxE "[[:space:]]*${lead}${n}/?[[:space:]]*" .gitignore; then continue; fi
   missing+=("$e")
 done
 if [ "${#missing[@]}" = 0 ]; then
@@ -191,7 +218,7 @@ else
     # A last line with no newline would otherwise run into the comment line.
     if [ -s .gitignore ] && [ -n "$(tail -c 1 .gitignore)" ]; then printf '%s' "$eol" >> .gitignore; fi
   fi
-  { printf '# dev-flow bootstrap: Playwright Test output, dev-flow run state%s' "$eol"
+  { printf '# dev-flow bootstrap: Playwright Test output, dev-flow run state, Python bytecode%s' "$eol"
     for e in "${missing[@]}"; do printf '%s%s' "$e" "$eol"; done; } >> .gitignore
   say "$verb .gitignore (${missing[*]})"
 fi

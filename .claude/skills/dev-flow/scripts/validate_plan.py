@@ -43,8 +43,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from spec_lib import (  # noqa: E402
-    ERROR, WARN, Doc, Finding, ISSUE_REF_RE, MIN_REASON, REQ_ID_RE, SKIP_SECTION,
-    SKIPPABLE_STEPS, TASK_HEADING_RE,
+    ERROR, WARN, Doc, Finding, ISSUE_REF_RE, MIN_REASON, REQ_HEADING_RE, REQ_ID_RE,
+    SKIP_SECTION, SKIPPABLE_STEPS, TASK_HEADING_RE,
     check_common, check_frontmatter, exit_code, issue_number, reasoned_skips, render,
     requirement_ids, skipped_steps,
 )
@@ -76,6 +76,12 @@ def unattended_enabled(findings: list[Finding]) -> bool:
         block = data.get("unattended") if isinstance(data, dict) else None
         return isinstance(block, dict) and block.get("enabled") is True
     return False
+
+
+def withdrawn_ids(prd_path: Path) -> set[str]:
+    """The PRD's requirements marked [WITHDRAWN], read as coverage.py reads them."""
+    return {b.id for b in Doc(prd_path).blocks(REQ_HEADING_RE, "## ")
+            if "[WITHDRAWN]" in b.body or "[WITHDRAWN]" in b.name}
 
 
 def check_skips(doc: Doc, findings: list[Finding]) -> None:
@@ -123,6 +129,7 @@ def validate(path: Path) -> tuple[list[Finding], str]:
     # Resolve the PRD this plan claims to implement -- unless the plan skips it.
     prd_rel = doc.frontmatter.get("prd", "")
     known_reqs: list[str] = []
+    withdrawn: set[str] = set()
     prd_path = None
     if prd_rel and prd_rel.lower() != "none":
         prd_path = (path.parent / Path(prd_rel).name)
@@ -138,6 +145,7 @@ def validate(path: Path) -> tuple[list[Finding], str]:
                                     "set 'prd: none'."))
     elif prd_path is not None:
         known_reqs = requirement_ids(prd_path)
+        withdrawn = withdrawn_ids(prd_path)
         if not known_reqs:
             findings.append(Finding(ERROR, "prd.noreqs", 1,
                                     f"PRD at {prd_path} declares no requirements."))
@@ -248,9 +256,10 @@ def validate(path: Path) -> tuple[list[Finding], str]:
                                     f"{task.id} has no description beyond its fields."))
 
     # Requirements with no task are reported here as a warning; coverage.py is the
-    # tool that treats it as a failure, once acceptance exists too.
+    # tool that treats it as a failure, once acceptance exists too. A withdrawn one
+    # needs no task, as coverage.py also reads it.
     for req in known_reqs:
-        if req not in cited:
+        if req not in cited and req not in withdrawn:
             findings.append(Finding(WARN, "req.uncovered", 1,
                                     f"{req} is not satisfied by any task. Intentional deferral "
                                     "is fine — say so in 'Out of scope'."))

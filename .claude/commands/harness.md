@@ -17,6 +17,11 @@ disable-model-invocation: true
   it. The model removes it with an rm of its own at the end. The marker grants
   end in `authoring-*`, not ` *`: the argument placeholder is not filled in
   allowed-tools, and `Bash(rm -f *)` would allow any removal (build item 26).
+
+  The "Write the tests to" line reads flow.json's acceptance_tests glob through
+  the same `--get` grant (build item 30, DECISIONS.md B15). It ends in
+  `|| echo`, since a preprocessing line that exits non-zero aborts the
+  command, and --get exits 4 when the key is unset (build item 29).
 -->
 
 # Context
@@ -25,6 +30,7 @@ disable-model-invocation: true
 - Acceptance cases: !`cat specs/$ARGUMENTS-*/acceptance.md 2>/dev/null || echo "NO ACCEPTANCE FILE — run /acceptance $ARGUMENTS first"`
 - Test command: !`python3 .claude/skills/dev-flow/scripts/pipeline_config.py --get test 2>&1`
 - Acceptance command: !`python3 .claude/skills/dev-flow/scripts/pipeline_config.py --get acceptance 2>&1`
+- Write the tests to: !`python3 .claude/skills/dev-flow/scripts/pipeline_config.py --get acceptance_tests 2>&1 || echo "no usable acceptance_tests glob in flow.json: nothing hides these tests from /implement"`
 - Existing test files: !`ls -R tests test spec __tests__ 2>/dev/null | head -30 || echo "(none found)"`
 
 # Task
@@ -39,6 +45,18 @@ written by something that had never seen the code.
 Reading existing *test* files to match conventions is fine and expected: use the
 project's runner, its directory layout, its assertion style, its fixture patterns.
 Do not invent a new testing idiom.
+
+**Write the tests only where the "Write the tests to" line above says**: every file
+you create or change is a path, from the project root, that matches that glob
+(flow.json's `acceptance_tests`). That is how they stay hidden: the guard hooks
+lock the files it matches exactly as they lock `acceptance.md`, so `/implement`
+can neither read nor edit them, and the project's `test` command leaves them out,
+so the implementer's own test runs neither run them nor print their names. A test
+anywhere else is in plain view of the implementer. If the project's `acceptance`
+command would not find tests at those paths, say so rather than writing them
+somewhere else. If the line says there is no glob, follow the project's
+conventions, and say in your report that nothing hides these tests from
+`/implement` until `acceptance_tests` is set.
 
 **Every test name must contain its case id.** This is the only link between the
 markdown and the runner, and `ac_trace.py` reads it by text match:

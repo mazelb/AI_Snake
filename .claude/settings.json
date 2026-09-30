@@ -51,7 +51,8 @@
       "Read(~/.netrc)",
       "Read(~/.docker/config.json)",
       "Read(~/.npmrc)",
-      "Edit(.github/workflows/**)"
+      "Edit(.github/workflows/**)",
+      "Read(~/.claude/projects/**)"
     ]
   },
   "env": {

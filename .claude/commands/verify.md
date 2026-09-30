@@ -82,8 +82,10 @@ is not configured, nothing ran; say so, and do not stand in for it by hand.
 
 When you finish, run
 `bash .claude/skills/dev-flow/scripts/retry_guard.sh $ARGUMENTS reset`,
-then, as a command of its own, `rm -f .dev-flow-run/verifying-$ARGUMENTS`. That
-locks the cases again and ends the implementation phase for this issue.
+then, as a command of its own, `rm -f .dev-flow-run/verifying-$ARGUMENTS`, with
+nothing before or after it: no `; echo`, no `&&`, no `cd`. A hook allows that
+`rm` only when it stands alone, and blocks it otherwise. That locks the cases
+again and ends the implementation phase for this issue.
 
 While this session runs, `flow.json`, the lint and format configs and the
 acceptance cases cannot be edited (`integrity-guard.sh`, `acceptance-guard.sh`): a

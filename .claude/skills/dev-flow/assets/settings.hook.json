@@ -51,6 +51,7 @@
       "Read(~/.netrc)",
       "Read(~/.docker/config.json)",
       "Read(~/.npmrc)",
+      "Read(~/.claude/projects/**)",
       "Edit(.github/workflows/**)"
     ]
   },

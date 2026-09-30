@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from spec_lib import (  # noqa: E402
-    ERROR, WARN, AC_HEADING_RE, Doc, Finding,
+    ERROR, WARN, AC_HEADING_RE, MIN_REASON, REQ_HEADING_RE, REQ_ID_RE, Doc, Finding,
     check_common, check_frontmatter, exit_code, fingerprint, render, requirement_ids,
     section_lines,
 )
@@ -50,6 +50,20 @@ IMPLEMENTATION_LEAK = [
 ]
 
 
+def withdrawn_ids(prd_path: Path) -> set[str]:
+    """The PRD's requirements marked [WITHDRAWN], read as coverage.py reads them."""
+    return {b.id for b in Doc(prd_path).blocks(REQ_HEADING_RE, "## ")
+            if "[WITHDRAWN]" in b.body or "[WITHDRAWN]" in b.name}
+
+
+def has_reason(line: str) -> bool:
+    """True when a 'Not covered' line says more than the ids it names: at least
+    MIN_REASON characters once the ids, the bullet and the punctuation around them
+    are gone ('- REQ-003' and '- REQ-003: n/a' have none)."""
+    rest = re.sub(r"[\s\-*:;,.()\[\]`—–]+", " ", REQ_ID_RE.sub(" ", line)).strip()
+    return len(rest) >= MIN_REASON
+
+
 def validate(path: Path) -> tuple[list[Finding], str]:
     doc = Doc(path)
     findings: list[Finding] = []
@@ -58,12 +72,14 @@ def validate(path: Path) -> tuple[list[Finding], str]:
 
     prd_rel = doc.frontmatter.get("prd", "")
     known_reqs: list[str] = []
+    withdrawn: set[str] = set()
     if prd_rel:
         prd_path = (path.parent / Path(prd_rel).name)
         if not prd_path.exists():
             prd_path = Path(prd_rel)
         if prd_path.exists():
             known_reqs = requirement_ids(prd_path)
+            withdrawn = withdrawn_ids(prd_path)
             stored = doc.frontmatter.get("prd_fingerprint", "")
             current = fingerprint(prd_path)
             if stored and stored != current:
@@ -140,14 +156,22 @@ def validate(path: Path) -> tuple[list[Finding], str]:
                                 "No '## Not covered' section. An untested requirement nobody has "
                                 "noticed is the failure mode this section exists to prevent."))
 
-    # A requirement named under 'Not covered' is accounted for, as the error below
-    # says; without this, a withdrawn one could only pass with an invented case.
-    not_covered = " ".join(text for _, text in section_lines(doc, "Not covered") or [])
+    # A requirement with no case is accounted for when the PRD withdraws it, or when
+    # a line under 'Not covered' names it with a reason, as the error below says.
+    # Without either, a withdrawn one could only pass with an invented case (M1).
+    not_covered = section_lines(doc, "Not covered") or []
     for req in known_reqs:
-        if req not in verified and not re.search(rf"\b{req}\b", not_covered):
+        if req in verified or req in withdrawn:
+            continue
+        listed = [(n, text) for n, text in not_covered if re.search(rf"\b{req}\b", text)]
+        if not listed:
             findings.append(Finding(ERROR, "req.unverified", 1,
                                     f"{req} has no acceptance case. Either write one or list it "
                                     "under 'Not covered' with a reason."))
+        elif not any(has_reason(text) for _, text in listed):
+            findings.append(Finding(ERROR, "req.notcoveredreason", listed[0][0],
+                                    f"{req} is listed under 'Not covered' with no reason. Say on "
+                                    f"its line why it has no case: '- {req}: <reason>'."))
 
     headline = (f"cases: {len(cases)} ({automated} automated) · "
                 f"requirements verified: {len(verified)}/{len(known_reqs) or '?'}")

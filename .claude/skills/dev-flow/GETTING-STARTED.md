@@ -89,8 +89,13 @@ the shipped matcher and timeout, run bootstrap again with `--update-hooks` (it
 prints each change, backs the file up first, and works with `--dry-run`). It changes
 settings entries only, never a hook script or command bootstrap copied earlier;
 the README's known limits say how to take those too.
+Bootstrap says whether `flow.json` names where the tests `/harness` generates go
+(`acceptance_tests`, step 3b), with a `NOTE` when it does not: until it does, nothing
+hides them from `/implement`.
 Bootstrap also adds `.dev-flow-run/` to `.gitignore`: `/acceptance`, `/harness`,
-`/implement` and `/verify` keep the markers the guard hooks read there.
+`/implement` and `/verify` keep the markers the guard hooks read there. And it adds
+`__pycache__/`: the validators' bytecode lands beside them, and a file git does not
+ignore would make every evidence record STALE (step 9).
 
 ## 3b. Fill in flow.json
 
@@ -123,6 +128,79 @@ fail from the report instead of scraping the runner's text, which is the safer r
 when `autonomy` is `autonomous`. It refuses a report that is missing, malformed or
 older than the run it is tracing, rather than falling back to the text. Without the
 key it reads the text, and a word counts as a verdict only where a runner prints one.
+
+### Hide the tests `/harness` writes
+
+`/harness` turns the acceptance cases into tests, and those tests spell the cases
+out. Name where they go, as a glob from the project root, and dev-flow hides them
+from `/implement` as it hides `acceptance.md` (build decision B15):
+
+```json
+"acceptance_tests": "**/*.acceptance.test.*"
+```
+
+- `/harness` writes its tests only at paths that match it.
+- The acceptance guard blocks a Read, Grep, Glob, a Bash, PowerShell or Monitor
+  command, or a Skill call's arguments, that names a file matching it: always while
+  any issue is being implemented, and otherwise unless `/acceptance`, `/harness` or
+  `/verify` has unlocked the cases. The integrity guard blocks writing one while an
+  issue is being implemented or verified.
+- **Your `test` command must leave them out.** `/implement` runs `test`, and would
+  otherwise run them and see their names and failures. A guard sees only what a
+  call names, so a command that runs them without naming them is not blocked;
+  leaving them out of `test` is what covers that. `/verify` still runs `test` and
+  `acceptance` separately, so nothing goes unchecked.
+
+Left empty, as `flow.example.json` ships it, nothing is hidden, and bootstrap and
+`pipeline_config.py` say so. The glob is `/`-separated, with `*`, `?` and `**` (a
+whole path component) as wildcards and letters, digits and `. _ - @ + ~ % #`
+otherwise; `pipeline_config.py --check` rejects anything else, since the guards
+read it with bash alone. A glob with no `/` in it matches at any depth.
+
+Per runner, `test` leaves the generated tests out and `acceptance` runs them:
+
+- **vitest**, with the tests beside the code as `*.acceptance.test.ts`. `--exclude`
+  adds to vitest's own excludes; `-t AC-` runs the tests whose names carry a case id.
+
+  ```json
+  "test": "npx vitest run --exclude '**/*.acceptance.test.*'",
+  "acceptance": "npx vitest run -t AC-",
+  "acceptance_tests": "**/*.acceptance.test.*"
+  ```
+
+- **jest**, the same layout. Leave them out in `jest.config.js`, so `test` names
+  nothing: `testPathIgnorePatterns: ['/node_modules/', '\\.acceptance\\.test\\.']`.
+  A command-line `--testPathIgnorePatterns` replaces the configured one, which is
+  how `acceptance` brings them back.
+
+  ```json
+  "test": "npx jest",
+  "acceptance": "npx jest --testPathIgnorePatterns=/node_modules/ -t AC-",
+  "acceptance_tests": "**/*.acceptance.test.*"
+  ```
+
+- **pytest**, with the tests in a directory of their own.
+
+  ```json
+  "test": "python -m pytest --ignore=tests/acceptance",
+  "acceptance": "python -m pytest tests/acceptance -v",
+  "acceptance_tests": "tests/acceptance/**"
+  ```
+
+- **Playwright Test**, with `testDir: './tests/acceptance'` as in the config below.
+  If Playwright is also your `test` runner, `--grep-invert @AC-` leaves the case
+  tests out by title. If `test` is vitest, which would pick up Playwright's
+  `*.spec.ts` files too, exclude the directory there instead
+  (`npx vitest run --exclude 'tests/acceptance/**'`).
+
+  ```json
+  "test": "npx playwright test --grep-invert @AC-",
+  "acceptance": "npx playwright test --grep @AC-",
+  "acceptance_tests": "tests/acceptance/**"
+  ```
+
+`tests/test_guards.py` in the harness repo runs each `test` command above through
+both guards while an issue is being implemented, so none of them is blocked.
 
 ### If the project has a browser surface: Playwright Test
 
@@ -285,7 +363,8 @@ rm -rf specs/0-smoke
 Talk through the idea until it stops producing new questions. Then open an issue
 using the **Spec request** template and fill all five fields — problem, who, how
 you would know, non-goals, constraints. Thin issues get refused by design, and on
-a first run that reads like a broken tool rather than a working gate.
+a first run that reads like a broken tool rather than a working gate. The template
+applies no label; `spec:auto` is yours to add once step 11 is set up.
 
 If the grilling hits a question that talking cannot settle — does this approach
 even work, which of these two shapes is right — stop and build a probe instead:
@@ -325,7 +404,8 @@ is not a gate.
 /implement 1
 ```
 
-`/implement` refuses if the plan is not approved. It cannot read `acceptance.md`
+`/implement` refuses if the plan is not approved, and then leaves nothing behind
+that would block `/acceptance`. It cannot read `acceptance.md`
 — if you see it get blocked, the guard is working. Until `/verify` runs it also
 cannot edit `flow.json`, the lint and format configs or `acceptance.md`, or skip
 git hooks with `--no-verify`.
@@ -337,8 +417,9 @@ git hooks with `--no-verify`.
 ```
 
 `/harness` turns the acceptance cases into real tests, in a forked context that
-never sees your implementation. `/implement` refuses if the plan is not approved
-and cannot read `acceptance.md`. `/verify` routes failures by cause: wrong case
+never sees your implementation, and writes them where `acceptance_tests` says
+(step 3b). `/implement` refuses if the plan is not approved and cannot read
+`acceptance.md`, or those tests while the glob is set. `/verify` routes failures by cause: wrong case
 goes back to the PRD, wrong code gets at most two automatic attempts, wrong
 requirement always comes to you. It runs your `test` and `acceptance` commands
 through `scripts/evidence.py`, which records each exit code against the exact
@@ -356,8 +437,10 @@ evidence is FRESH for the committed tree: an edit after `/verify` makes it STALE
 and the PR then stays a draft until you run `/verify 1` again. It also checks
 that commits cite requirement ids, and flags any file the plan did not mention. With the Pocock `code-review`
 skill installed, it hands the craft review to that skill, with the PRD as its spec.
-Then it opens or updates the PR and, when everything is clean, marks it ready for
-review; you merge. At `autonomous` it also merges.
+Then it opens or updates the PR, with `Closes #1` in its body, and, when everything
+is clean, marks it ready for review; you merge. At `autonomous` it also merges. A
+project with no `lint` command gets "lint: not configured" in the PR body, and the
+PR is readied all the same; `test` and `acceptance` must have run through `/verify`.
 
 That is where this flow ends. Release, deployment, and measuring whether the work
 achieved its goal are project-specific — see `optional-delivery/README.md` if you

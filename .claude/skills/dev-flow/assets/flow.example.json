@@ -8,5 +8,6 @@
     "test": "",
     "acceptance": "",
     "build": ""
-  }
+  },
+  "acceptance_tests": ""
 }

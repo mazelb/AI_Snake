@@ -21,11 +21,19 @@ disable-model-invocation: true
   marker would keep the issue locked anyway, but a stale unlock is not left
   lying around. That rm grant ends in `authoring-*`, not ` *`, since
   the argument placeholder is not filled in allowed-tools (build item 26).
+
+  The marker is set only when the plan's `status:` is `approved` (build item
+  29). M1 found that a refused /implement had already set it, and the next
+  /acceptance could not write the cases; nothing inside the session can remove
+  it, since integrity-guard.sh blocks that. The line has no `if`, and ends in
+  `|| echo`, because outside auto mode a preprocessing line with an `if` is
+  refused, and one that exits non-zero aborts the command, silently in both
+  cases.
 -->
 
 # Context
 
-- Phase: !`mkdir -p .dev-flow-run && rm -f .dev-flow-run/authoring-$ARGUMENTS && touch .dev-flow-run/implementing-$ARGUMENTS && echo "implementing issue $ARGUMENTS: its acceptance cases stay locked, and flow.json, the lint and format configs and acceptance.md are protected, until /verify $ARGUMENTS"`
+- Phase: !`mkdir -p .dev-flow-run && grep -qE '^status:[[:space:]]*approved[[:space:]]*$' specs/$ARGUMENTS-*/plan.md && rm -f .dev-flow-run/authoring-$ARGUMENTS && touch .dev-flow-run/implementing-$ARGUMENTS && echo "implementing issue $ARGUMENTS: its acceptance cases stay locked, and flow.json, the lint and format configs and acceptance.md are protected, until /verify $ARGUMENTS" || echo "NOT STARTED: the plan for issue $ARGUMENTS is not approved, so no implementing marker was set"`
 - Plan: !`cat specs/$ARGUMENTS-*/plan.md 2>/dev/null || echo "NO PLAN FOUND for issue $ARGUMENTS — run /plan $ARGUMENTS first"`
 - Plan status: !`grep -h '^status:' specs/$ARGUMENTS-*/plan.md 2>/dev/null || echo "unknown"`
 - Coverage: !`python3 .claude/skills/dev-flow/scripts/coverage.py specs/$ARGUMENTS-* 2>&1 | head -20`
@@ -35,19 +43,21 @@ disable-model-invocation: true
 Implement the plan for issue #$ARGUMENTS.
 
 **Refuse if the plan is not approved.** `status:` must be `approved`. If it says
-`draft`, stop and tell me — approving the plan is the one mandatory human gate in
-this pipeline, and it exists precisely so that nothing expensive runs on a plan
-nobody read.
+`draft`, or the Phase line above says `NOT STARTED`, stop and tell me — approving
+the plan is the one mandatory human gate in this pipeline, and it exists precisely
+so that nothing expensive runs on a plan nobody read.
 
-**You cannot read `specs/*/acceptance.md`.** A hook blocks it, and that is
-deliberate rather than a formality. Code written against visible tests passes those
-tests; it does not necessarily satisfy the requirement they were derived from. If
-you find yourself wanting to look, that is the signal the plan or the PRD is
-ambiguous — ask me instead.
+**You cannot read `specs/*/acceptance.md`, nor the acceptance tests `/harness`
+generated from it** (the files `flow.json`'s `acceptance_tests` glob matches). A hook
+blocks both, and that is deliberate rather than a formality. Code written against
+visible tests passes those tests; it does not necessarily satisfy the requirement
+they were derived from. If you find yourself wanting to look, that is the signal the
+plan or the PRD is ambiguous — ask me instead.
 
 **Fix the code, not the checks.** Until `/verify $ARGUMENTS` runs, a second hook
-blocks edits to `flow.json`, the lint and format configs and `acceptance.md`, and
-blocks `--no-verify` and `core.hooksPath`. If a check is wrong, stop and tell me.
+blocks edits to `flow.json`, the lint and format configs, `acceptance.md` and the
+generated acceptance tests, and blocks `--no-verify` and `core.hooksPath`. If a
+check is wrong, stop and tell me.
 
 Work task by task, in the sequencing order the plan gives:
 
@@ -65,6 +75,10 @@ Work task by task, in the sequencing order the plan gives:
 4. If a task turns out to be wrong or impossible, stop and say so. Do not
    improvise a different approach — that silently invalidates the plan I approved.
 
-When every task is done, run the repo's own test suite and report. Then stop.
+When every task is done, run the repo's own test suite — `flow.json`'s `test`
+command, as configured — and report. That command is set up to leave out the
+generated acceptance tests, so it runs your tests and the project's, not the
+acceptance cases; do not run the `acceptance` command or name those test files.
+Then stop.
 Verification is `/verify $ARGUMENTS`, and it is a separate step for the same reason the
 acceptance cases are hidden.

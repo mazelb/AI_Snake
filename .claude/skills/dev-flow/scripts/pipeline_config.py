@@ -25,14 +25,26 @@ Two consequences worth understanding:
     The gates that never move regardless of tier are listed in GATES below — those
     exist because of what they protect, not because of how much you trust the agent.
 
-One key that is not a command: `acceptance_junit`, the path (from the project
-root) of a JUnit XML report the `acceptance` command writes. When it is set,
-`ac_trace.py` reads verdicts from that report instead of scraping the runner's
-text output. It is optional; a runner that cannot write JUnit XML leaves it out.
+Two keys that are not commands, both optional:
+
+  - `acceptance_junit`, the path (from the project root) of a JUnit XML report
+    the `acceptance` command writes. When it is set, `ac_trace.py` reads verdicts
+    from that report instead of scraping the runner's text output. A runner that
+    cannot write JUnit XML leaves it out.
+  - `acceptance_tests`, a glob (from the project root) naming where `/harness`
+    writes the tests it generates from the acceptance cases, such as
+    `**/*.acceptance.test.*` or `tests/acceptance/**`. The guard hooks lock the
+    files it matches as they lock `acceptance.md` (build item 30, DECISIONS.md
+    B15), and the `test` command should leave them out. The hooks read it with
+    bash alone, so it is held to a plain form: `/`-separated, relative, `*`, `?`
+    and `**` (a whole component) as wildcards, and letters, digits and
+    `. _ - @ + ~ % #` otherwise. Unset or empty, nothing is hidden.
 
 Usage:
     python3 pipeline_config.py --check          validate flow.json
     python3 pipeline_config.py --get test       print one command
+    python3 pipeline_config.py --get acceptance_tests
+                                                print the generated tests' glob
     python3 pipeline_config.py --autonomy       print the autonomy tier
 """
 
@@ -40,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 
 # Piping into head/tail is normal usage; a broken pipe should not print a traceback.
@@ -113,6 +126,36 @@ def junit_problems(data: dict) -> list[str]:
     return []
 
 
+# What `acceptance_tests` may hold: what the guard hooks can match in bash (see
+# tests_glob in hooks/acceptance-guard.sh). A path character they stop at (a
+# space, a quote, `=`, `:` and the like) could never be matched in a command.
+TESTS_GLOB_CHARS = re.compile(r"[A-Za-z0-9._@+~%#*?/-]+")
+
+
+def tests_glob_problems(data: dict) -> list[str]:
+    """What is wrong with `acceptance_tests`, if anything."""
+    value = data.get("acceptance_tests")
+    if value is None or value == "":
+        return []
+    what = "acceptance_tests must be a glob from the project root naming the tests /harness generates"
+    if not isinstance(value, str):
+        return [f"{what}, as a string"]
+    if not TESTS_GLOB_CHARS.fullmatch(value):
+        bad = sorted({c for c in value if not TESTS_GLOB_CHARS.fullmatch(c)})
+        return [f"{what}; it may hold only letters, digits, . _ - @ + ~ % #, the wildcards * ? ** "
+                f"and / (found {' '.join(repr(c) for c in bad)})"]
+    parts = value.split("/")
+    if value.startswith("/"):
+        return [f"{what}; it is absolute ({value!r})"]
+    if any(p in ("", ".", "..") for p in parts):
+        return [f"{what}; it has an empty, . or .. component ({value!r})"]
+    if any("**" in p and p != "**" for p in parts):
+        return [f"{what}; ** must be a whole path component ({value!r})"]
+    if not re.search(r"[^*?/]", value):
+        return [f"{what}; it holds only wildcards, so it would lock every file ({value!r})"]
+    return []
+
+
 class Config:
     def __init__(self, path: Path, data: dict):
         self.path = path
@@ -143,6 +186,11 @@ class Config:
         value = self.data.get("acceptance_junit")
         return value if isinstance(value, str) and value.strip() else None
 
+    @property
+    def acceptance_tests(self) -> str | None:
+        value = self.data.get("acceptance_tests")
+        return value if isinstance(value, str) and value else None
+
     def validate(self) -> list[str]:
         problems = []
         if self.autonomy not in AUTONOMY_TIERS:
@@ -155,6 +203,7 @@ class Config:
                     f"unknown command '{name}' — known: {', '.join(KNOWN_COMMANDS)}")
 
         problems.extend(junit_problems(self.data))
+        problems.extend(tests_glob_problems(self.data))
 
         target = self.deploy.get("target", "none")
         if not self.deploy:
@@ -200,6 +249,9 @@ class Config:
         lines.append("  acceptance results: " + (
             f"JUnit report {self.acceptance_junit}" if self.acceptance_junit
             else "runner text output (no acceptance_junit)"))
+        lines.append("  generated acceptance tests: " + (
+            f"{self.acceptance_tests} (locked like acceptance.md)" if self.acceptance_tests
+            else "not hidden (no acceptance_tests)"))
         return "\n".join(lines)
 
 
@@ -243,6 +295,18 @@ def main() -> int:
                   file=sys.stderr)
             return 1
         print(cfg.autonomy)
+        return 0
+
+    if args.get == "acceptance_tests":
+        # Not a command, but read by /harness the same way (its grant is --get).
+        problems = tests_glob_problems(cfg.data)
+        if problems:
+            print(problems[0], file=sys.stderr)
+            return 1
+        if not cfg.acceptance_tests:
+            print("(not configured: acceptance_tests)", file=sys.stderr)
+            return 4
+        print(cfg.acceptance_tests)
         return 0
 
     if args.get:
