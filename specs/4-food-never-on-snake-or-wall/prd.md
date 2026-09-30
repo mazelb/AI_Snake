@@ -27,14 +27,14 @@ late in a long game or on dense generated levels.
 
 ## Success metric
 
-- Metric: number of the food-placement scenarios in REQ-001–REQ-002 covered by a passing automated test
-- Current baseline: 0 of 2 — `getRandomPoint` has no test and is not in `gameLogic.ts`
-- Target: 2 of 2
+- Metric: number of the food-placement scenarios in REQ-001–REQ-003 covered by a passing automated test
+- Current baseline: 0 of 3 — `getRandomPoint` has no test and is not in `gameLogic.ts`
+- Target: 3 of 3
 - Source: vitest run output
 
 ## Non-goals
 
-- Not defining what happens when no free cell is left at all (a "board full" win); that is a separate decision.
+- Not designing a "board full" win (a win screen, a score bonus); a full board ends the game for now (REQ-003).
 - No change to movement, collision, speed, scoring, or high score handling (`advanceSnake` in `gameLogic.ts` is untouched).
 - No change to Gemini level generation.
 - No visual or UI changes.
@@ -61,6 +61,15 @@ ate, in `resetGame`, and in `handleGenerateLevel` all obtain the position from t
 REQ-001 function, and no code path returns `{ x: 0, y: 0 }` as a default. Checked
 by the REQ-001 tests plus a search of `App.tsx` showing no remaining fallback.
 
+### REQ-003 [P0] A full board ends the game
+
+When no cell is free of the snake and the walls, placing food ends the game: the
+status becomes GAME_OVER, and no food is placed on an occupied cell.
+
+**Acceptance:** Given a snake and walls that cover every cell, a food placement
+sets the status to GAME_OVER and does not return an occupied cell as the food
+position. Covered by an automated test.
+
 ## Constraints
 
 - No new runtime dependencies: the app runs in AI Studio from the import map in `index.html` (source: issue #4).
@@ -74,4 +83,6 @@ by the REQ-001 tests plus a search of `App.tsx` showing no remaining fallback.
 
 | Question | Owner | Blocks |
 |---|---|---|
-| When no cell is free, what should the function return or do? Out of scope here, but the function still needs some defined result. | mazelb | plan |
+| None | — | — |
+
+Answered 2026-09-30 by mazelb: when no cell is free of the snake and the walls, the game ends (GAME_OVER) until a real "win" is designed. Added as REQ-003.
